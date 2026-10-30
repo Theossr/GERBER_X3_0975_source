@@ -666,13 +666,13 @@ void GraphicsView::wheelEvent(QWheelEvent* event) {
                 : sb->setValue(value - delta.y());
         };
         switch(event->modifiers()) {
-        case Qt::ControlModifier:
+        case Qt::NoModifier:
             if(abs(delta.y()) == 120) (delta.y() > 0) ? zoomIn() : zoomOut();
             break;
         case Qt::ShiftModifier:
             if(!delta.x()) sbUpdate(horizontalScrollBar());
             break;
-        case Qt::NoModifier:
+        case Qt::ControlModifier:
             if(!delta.x()) sbUpdate(verticalScrollBar());
             break;
         default: // QGraphicsView::wheelEvent(event);
@@ -718,90 +718,86 @@ auto mouseDragEvent(QMouseEvent* event, QEvent::Type type, Qt::MouseButton butto
 void GraphicsView::mousePressEvent(QMouseEvent* event) {
     pressPos = mapToScene(event->position());
     toScenePos(event);
-    qDebug() << event->button();
-    if(event->buttons() & Qt::MiddleButton) {
+
+    if(event->button() == Qt::LeftButton ||
+       event->button() == Qt::MiddleButton) {
+
         event->accept();
         setDragMode(ScrollHandDrag);
         setInteractive(false);
-        QMouseEvent fakeEvent{event->type(),
-            event->position(), event->scenePosition(), event->globalPosition(),
-            Qt::LeftButton, event->buttons() | Qt::LeftButton, event->modifiers()};
-        QGraphicsView::mousePressEvent(&fakeEvent);
+
+        auto fakeEvent = mouseDragEvent(
+            event, event->type(), Qt::LeftButton, true);
+
+        QGraphicsView::mousePressEvent(fakeEvent.get());
+
     } else if(event->button() == Qt::RightButton) {
-        // { // удаление мостика
-        // QGraphicsItem* item = scene()->itemAt(mapToScene(event->position().toPoint()), transform());
-        // if (item && item->type() == Gi::Type::Bridge && !static_cast<BridgeItem*>(item)->ok())
-        // delete item;
-        // }
 
-        // setDragMode(NoDrag);
-        // setInteractive(true);
-        // QGraphicsView::mousePressEvent(event);
+        setDragMode(RubberBandDrag);
+        setInteractive(true);
 
-        // это что бы при вызове контекстного меню ничего постороннего не было
+        auto fakeEvent = mouseDragEvent(
+            event, event->type(), Qt::LeftButton, true);
+
+        QGraphicsView::mousePressEvent(fakeEvent.get());
+
         emit mouseClickR(scenePos);
-#if 0
-        QGraphicsItem* item = scene()->itemAt(/*mapToScene(event->position().toPoint())*/
-            scenePos, transform());
 
-        if(item && contains<Gi::Type::Drill, Gi::Type::DataSolid>(item->type()))
-            GiToShapeEvent(event, item);
-#endif
     } else {
-        qInfo("else");
         QGraphicsView::mousePressEvent(event);
-        // setDragMode(RubberBandDrag);
-        // это для выделения рамкой  - работа по-умолчанию левой кнопки мыши
-        if(ruler_ && !(rulerCtr++ & 0x1)) rulPt1 = scenePos;
 
-        if(auto item{scene()->itemAt(scenePos, transform())};
-            0 && item
-            && item->type() == QGraphicsPixmapItem::Type) { // NOTE  возможно DD для направляющих не сделаю.
-            QMimeData* mimeData = new QMimeData;
-            mimeData->setText(Ruler::MimeType);
-            mimeData->setData(Ruler::MimeType,
-                QByteArray::fromRawData(reinterpret_cast<const char*>(item),
-                    sizeof(void*)));
-
-            QPixmap pixmapIcon{Ruler::Breadth, Ruler::Breadth};
-            pixmapIcon.fill(Qt::magenta);
-
-            QDrag* drag = new QDrag{this};
-            drag->setMimeData(mimeData);
-            drag->setPixmap(pixmapIcon);
-            drag->setHotSpot(pixmapIcon.rect().center());
-            Qt::DropAction dropAction = drag->exec(); // Qt::CopyAction | Qt::MoveAction, Qt::CopyAction);
-            if(dropAction == Qt::MoveAction) { }
-        }
+        if(ruler_ && !(rulerCtr++ & 0x1))
+            rulPt1 = scenePos;
     }
 }
 
 void GraphicsView::mouseReleaseEvent(QMouseEvent* event) {
-    qWarning() << event->button();
-    if(event->button() == Qt::MiddleButton) {
-        event->accept();
-        // отпускаем левую кнопку мыши которую виртуально зажали в mousePressEvent
-        QMouseEvent fakeEvent{event->type(),
-            event->position(), event->scenePosition(), event->globalPosition(),
-            Qt::LeftButton, event->buttons() & ~Qt::LeftButton, event->modifiers()};
-        QGraphicsView::mouseReleaseEvent(&fakeEvent);
+
+    if(event->button() == Qt::LeftButton ||
+       event->button() == Qt::MiddleButton) {
+
+        auto fakeEvent = mouseDragEvent(
+            event, event->type(), Qt::LeftButton, false);
+
+        QGraphicsView::mouseReleaseEvent(fakeEvent.get());
+
         setDragMode(RubberBandDrag);
         setInteractive(true);
+
+        if(event->button() == Qt::LeftButton)
+            emit mouseClickL(toScenePos(event));
+
     } else if(event->button() == Qt::RightButton) {
-        // это что бы при вызове контекстного меню ничего постороннего не было
-        // QGraphicsView::mousePressEvent(event);
+
+        auto fakeEvent = mouseDragEvent(
+            event, event->type(), Qt::LeftButton, false);
+
+        QGraphicsView::mouseReleaseEvent(fakeEvent.get());
+
         setDragMode(RubberBandDrag);
-        // setDragMode(RubberBandDrag);
-        // setInteractive(true);
-        // emit mouseClickR(toScenePos(event));
+        setInteractive(true);
+
     } else {
         QGraphicsView::mouseReleaseEvent(event);
-        emit mouseClickL(toScenePos(event));
     }
 }
 
 void GraphicsView::mouseMoveEvent(QMouseEvent* event) {
-    QGraphicsView::mouseMoveEvent(event);
+    if(event->buttons() & (Qt::LeftButton | Qt::RightButton | Qt::MiddleButton)) {
+    QMouseEvent fakeEvent{
+        event->type(),
+        event->position(),
+        event->scenePosition(),
+        event->globalPosition(),
+        Qt::NoButton,
+        event->buttons() | Qt::LeftButton,
+        event->modifiers()
+    };
+
+    QGraphicsView::mouseMoveEvent(&fakeEvent);
+    } else {
+        QGraphicsView::mouseMoveEvent(event);
+    }
 
     auto dir = pressPos - mapToScene(event->position());
     if(dir.x() > 0 && dir.y() < 0)
