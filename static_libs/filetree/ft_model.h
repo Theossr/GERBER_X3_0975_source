@@ -1,0 +1,129 @@
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License:                                                                     *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ ********************************************************************************/
+#pragma once
+
+#include "ggcore_export.h"
+
+#include "abstract_file.h"
+#include "project.h"
+
+#include <QAbstractItemModel>
+
+class AbstractFile;
+namespace Shapes {
+class AbstractShape;
+}
+
+class Project;
+
+namespace GCode {
+class File;
+} // namespace GCode
+
+namespace Gi {
+class Item;
+class Debug_;
+} // namespace Gi
+
+namespace FileTree {
+
+class Node;
+
+class GGCORE_EXPORT Model : public QAbstractItemModel {
+    Q_OBJECT
+    Node* rootItem;
+    std::map<int, Node*> fileFolders;
+    friend class ::Project;
+    friend class Node;
+    friend class View;
+    friend class Gi::Debug_;
+
+signals:
+    void updateActions();
+    void select(const QModelIndex&);
+
+public:
+    enum RootNodes {
+        GerberFiles,
+        DrillFiles,
+        ToolPath,
+        DxfPath,
+        Shapes,
+        NodeCount,
+    };
+
+    explicit Model(QObject* parent = nullptr);
+    ~Model() override;
+
+    void closeProject();
+
+    // Перерисовать строку узла. Нужно, когда данные за узлом сменились мимо
+    // setData -- например при замене файла на месте.
+    void updateNode(Node* node);
+    // Убрать строку узла вместе с самим узлом. Файл удаляется следом: его время
+    // жизни привязано к узлу (см. деструкторы узлов, зовущие deleteFile).
+    void removeNode(Node* node);
+
+    // Разложить узлы одной УП. Несколько файлов (у многоинструментного плагина
+    // один запуск даёт по файлу на инструмент) уходят в подпапку с именем
+    // программы; одиночный лежит прямо в «GCode». Подпапка заводится и убирается
+    // по надобности -- когда инструментов стало меньше или больше.
+    void groupProgram(const QString& programName, const std::vector<Node*>& nodes);
+    // Перенести узел в другую папку, не разрушая его.
+    void moveNode(Node* node, Node* newParent);
+
+    // QAbstractItemModel interface
+    QModelIndex index(int row, int column, const QModelIndex& parent) const override;
+    QModelIndex parent(const QModelIndex& index) const override;
+    QVariant data(const QModelIndex& index, int role) const override;
+    bool setData(const QModelIndex& index, const QVariant& value, int role = Qt::EditRole) override;
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
+    Qt::ItemFlags flags(const QModelIndex& index) const override;
+    bool removeRows(int row, int count, const QModelIndex& parent) override;
+
+    int columnCount(const QModelIndex& parent) const override;
+    int rowCount(const QModelIndex& parent) const override;
+    // public protected method
+    using QAbstractItemModel::beginInsertRows;
+    using QAbstractItemModel::beginRemoveRows;
+    using QAbstractItemModel::createIndex;
+    using QAbstractItemModel::endInsertRows;
+    using QAbstractItemModel::endRemoveRows;
+
+    // Drag and Drop
+    // QStringList mimeTypes() const override;
+    // QMimeData* mimeData(const QModelIndexList& indexes) const override;
+    // bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent) override;
+    // Qt::DropActions supportedDragActions() const override;
+    // Qt::DropActions supportedDropActions() const override;
+    // bool moveRows(const QModelIndex& sourceParent, int sourceRow, int count, const QModelIndex& destinationParent, int destinationChild) override;
+    Node* getItem(const QModelIndex& index) const;
+
+private:
+    const QString mimeType;
+
+    // Индекс узла в модели. Для rootItem — невалидный индекс (корень дерева).
+    QModelIndex nodeIndex(Node* node) const;
+    // Папка верхнего уровня для типа type. Создаётся при первом обращении.
+    Node* folderNode(uint32_t type, const QString& name);
+    // Добавляет node последним потомком folder, возвращает его строку.
+    int appendChild(Node* folder, Node* node);
+
+    int addFile(Node* item, AbstractFile* file);
+    void addFile(AbstractFile* file);
+    void addShape(Shapes::AbstractShape* shape);
+
+    void addItem(Gi::Item* item);
+};
+
+} // namespace FileTree
+
+#include "app.h"

@@ -1,0 +1,47 @@
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ ********************************************************************************/
+#pragma once
+
+#include "ggcore_export.h"
+#include <QWidget>
+
+class DoubleSpinBox;
+class QLabel;
+class QRadioButton;
+
+class GGCORE_EXPORT DepthForm : public QWidget {
+    Q_OBJECT
+public:
+    explicit DepthForm(QString&& groupName, QWidget* parent = nullptr);
+    ~DepthForm() override;
+    double value() const;
+    void setValue(double value);
+
+signals:
+    void valueChanged(double);
+
+protected:
+    void showEvent(QShowEvent* event) override;
+
+private:
+    double value_{};
+
+    DoubleSpinBox* dsbx;
+    QLabel* label;
+    QRadioButton* rbBoard;
+    QRadioButton* rbCopper;
+    QRadioButton* rbCustom;
+
+    const QString groupName;
+
+    void setupUi(QWidget* Form);
+    void retranslateUi(QWidget* Form);
+};

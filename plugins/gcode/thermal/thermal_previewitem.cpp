@@ -1,0 +1,260 @@
+// This is an open source non-commercial project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++, C#, and Java: https://pvs-studio.com
+/*******************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ *******************************************************************************/
+#include "thermal_previewitem.h"
+#include "app.h"
+#include "geo/boolean.h"
+#include "graphicsview.h"
+#include "thermal_node.h"
+#include "tool_pch.h"
+#include <QAnimationGroup>
+#include <QElapsedTimer>
+#include <QGraphicsSceneContextMenuEvent>
+#include <QIcon>
+#include <QMenu>
+#include <QPainter>
+#include <QParallelAnimationGroup>
+#include <QPropertyAnimation>
+#include <QStyleOptionGraphicsItem>
+#include <QtMath>
+#include <mutex>
+
+namespace Thermal {
+
+AbstractThermPrGi::AbstractThermPrGi(Tool& tool)
+    : agr{this}
+    , pa1{this, "bodyColor"_ba}
+    , pa2{this, "pathColor"_ba}
+    , tool(tool)
+    , bodyColor_(colors[(int)Colors::Default])
+    , pathColor_(colors[(int)Colors::UnUsed])
+
+{
+    agr.addAnimation(&pa1);
+    agr.addAnimation(&pa2);
+
+    pa1.setEasingCurve(QEasingCurve(QEasingCurve::Linear));
+    pa1.setDuration(150);
+    pa2.setEasingCurve(QEasingCurve(QEasingCurve::Linear));
+    pa2.setDuration(150);
+
+    setAcceptHoverEvents(true);
+    setFlag(ItemIsSelectable, true);
+    setOpacity(0);
+    setZValue(std::numeric_limits<double>::max() - 10);
+
+    static std::mutex m;
+    m.lock();
+    thpi.push_back(this);
+    m.unlock();
+}
+
+AbstractThermPrGi::~AbstractThermPrGi() { thpi.clear(); }
+
+void AbstractThermPrGi::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) {
+    if(pathColor_.alpha()) {
+        // if (isEmpty > 0) {
+        // painter->setPen(QPen(App::settings().guiColor(GuiColors::ToolPath), 0.0));
+        // painter->setBrush(Qt::NoBrush);
+        // for (QPolygonF polygon : bridge_) {
+        // polygon.append(polygon.first());
+        // painterPath.addPolygon(polygon);
+        // painter->drawPolyline(polygon);
+        // }
+        // } else {
+        if(agr.state() == QAbstractAnimation::Running) {
+            int a;
+            QColor c1(App::settings().guiColor(GuiColors::CutArea));
+            a = App::settings().guiColor(GuiColors::CutArea).alpha();
+            c1.setAlpha(std::clamp(pathColor().alpha(), 0, a));
+            painter->setBrush(Qt::NoBrush);
+            painter->setPen(QPen(c1, diameter, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter->drawPath(painterPath);
+
+            QColor c2(App::settings().guiColor(GuiColors::ToolPath));
+            a = App::settings().guiColor(GuiColors::ToolPath).alpha();
+            c2.setAlpha(std::clamp(pathColor().alpha(), 0, a));
+            painter->setPen(QPen(c2, 2 * App::grView().scaleFactor()));
+            painter->drawPath(painterPath);
+        } else {
+            painter->setBrush(Qt::NoBrush);
+            painter->setPen(QPen(App::settings().guiColor(GuiColors::CutArea), diameter, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter->drawPath(painterPath);
+            QColor pc{bodyColor_};
+            pc.setAlpha(255);
+            painter->setPen(QPen(App::settings().guiColor(GuiColors::ToolPath), 2 * App::grView().scaleFactor()));
+            painter->drawPath(painterPath);
+        }
+        // }
+    }
+    painter->setBrush(bodyColor_);
+    QColor p{bodyColor_};
+    p.setAlpha(255);
+    painter->setPen(QPen(p, 0.0));
+    painter->drawPath(sourcePath);
+}
+
+// QRectF AbstractThermPrGi::boundingRect() const { return sourcePath.boundingRect().united(painterPath.boundingRect()); }
+
+QPainterPath AbstractThermPrGi::shape() const { return sourcePath; }
+
+int AbstractThermPrGi::type() const { return Gi::Type::Preview; }
+
+bool AbstractThermPrGi::isValid() const {
+    return !previewPaths.empty() && node_->isChecked();
+}
+
+void AbstractThermPrGi::changeColor() {
+    pa1.setStartValue(bodyColor_);
+    if(colorState & Selected)
+        pa1.setEndValue(QColor((colorState & Hovered) ? colors[(int)Colors::SelectedHovered] : colors[(int)Colors::Selected]));
+    else if(colorState & Used && !previewPaths.empty())
+        pa1.setEndValue(QColor((colorState & Hovered) ? colors[(int)Colors::UsedHovered] : colors[(int)Colors::Used]));
+    else
+        pa1.setEndValue(QColor((colorState & Hovered) ? colors[(int)Colors::DefaultHovered] : colors[(int)Colors::Default]));
+    pa2.setStartValue(pathColor_);
+    pa2.setEndValue(QColor((colorState & Used) ? colors[(int)Colors::Used] : colors[(int)Colors::UnUsed]));
+    agr.start();
+}
+
+void AbstractThermPrGi::contextMenuEvent(QGraphicsSceneContextMenuEvent* event) {
+    QMenu menu;
+    if(node_->isChecked())
+        menu.addAction(QIcon::fromTheme(u"list-remove"_s), QObject::tr("Exclude from the calculation"), [this] {
+            for(auto item: thpi)
+                if((item == this || item->isSelected()) && item->node_->isChecked()) {
+                    item->node_->disable();
+                    item->update();
+                    item->mouseDoubleClickEvent(nullptr);
+                }
+        });
+    else
+        menu.addAction(QIcon::fromTheme(u"list-add"_s), QObject::tr("Include in the calculation"), [this] {
+            for(auto item: thpi)
+                if((item == this || item->isSelected()) && !item->node_->isChecked()) {
+                    item->node_->enable();
+                    item->update();
+                    item->mouseDoubleClickEvent(nullptr);
+                }
+        });
+    menu.exec(event->screenPos());
+}
+
+void AbstractThermPrGi::mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) {
+    if(event) {
+        QGraphicsItem::mouseDoubleClickEvent(event);
+        node_->isChecked() ? node_->disable() : node_->enable();
+    }
+    node_->isChecked() ? colorState |= Used : colorState &= ~Used;
+    changeColor();
+}
+
+void AbstractThermPrGi::hoverEnterEvent(QGraphicsSceneHoverEvent* event) {
+    colorState |= Hovered;
+    changeColor();
+    QGraphicsItem::hoverEnterEvent(event);
+}
+
+void AbstractThermPrGi::hoverLeaveEvent(QGraphicsSceneHoverEvent* event) {
+    colorState &= ~Hovered;
+    changeColor();
+    QGraphicsItem::hoverLeaveEvent(event);
+}
+
+QVariant AbstractThermPrGi::itemChange(QGraphicsItem::GraphicsItemChange change, const QVariant& value) {
+    if(change == ItemSelectedChange) {
+        if(value.toInt()) {
+            colorState |= Selected;
+            emit selectionChanged(node_->index(), {});
+        } else {
+            colorState &= ~Selected;
+            emit selectionChanged({}, node_->index());
+        }
+        changeColor();
+    } else if(change == ItemVisibleChange) {
+        auto animation = new QPropertyAnimation{this, "opacity"_ba};
+        animation->setEasingCurve(QEasingCurve(QEasingCurve::Linear));
+        animation->setDuration(200);
+        animation->setStartValue(0.0);
+        animation->setEndValue(1.0);
+        animation->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+    return QGraphicsItem::itemChange(change, value);
+}
+
+PreviewItem::PreviewItem(const Geo::Polygons& fill, const QPointF pos, Tool& tool)
+    : AbstractThermPrGi{tool}
+    , fill_{fill}
+    , pos_{pos} {
+    sourcePath = fill_.toPath();
+}
+
+QPointF PreviewItem::pos() const { return pos_; }
+
+const Geo::Polygons& PreviewItem::fill() const { return fill_; }
+
+void PreviewItem::redraw() {
+    if(double d = tool.getDiameter(tool.depth()); cashedPath.empty() || !qFuzzyCompare(diameter, d)) {
+        diameter = d;
+        // Кольцо -- офсет пада на радиус (delta у Inflate -- полная ширина);
+        // рамка -- полоса вдоль кольца, прежний Inflate64(Miter, Round).
+        const Geo::Polygons ring = Geo::Inflate(fill_, diameter);
+        cashedPath = ring.contours();
+        cashedFrame = ring.boundaryBand(diameter * 0.1);
+    }
+    if(qFuzzyIsNull(node_->tickness()) && node_->count()) {
+        bridge_ = {};
+    } else {
+        // Спица -- прямоугольник от центра пада наружу (прежний Inflate64 с
+        // EndType::Butt), собранный руками. Спицы у центра НАКЛАДЫВАЮТСЯ, так
+        // что складываются объединением (прежний FillRule::Positive), а не
+        // even-odd -- тот выгрыз бы их общую середину.
+        const auto rect{sourcePath.boundingRect()};
+        const QPointF center{rect.center()};
+        const double radius = sqrt((rect.width() + diameter) * (rect.height() + diameter));
+        const double half = (node_->tickness() + diameter) * 0.5;
+        Geo::Polygons spokes;
+        for(int i{}; i < node_->count(); ++i) { // Gaps
+            const double angle = i * 2 * pi / node_->count() + qDegreesToRadians(node_->angle());
+            const QPointF dir{cos(angle), sin(angle)};
+            const QPointF normal{-dir.y() * half, dir.x() * half};
+            const QPointF end = center + dir * radius;
+            Geo::Polyline spoke{
+                Geo::Vertex{center - normal},
+                Geo::Vertex{end - normal},
+                Geo::Vertex{end + normal},
+                Geo::Vertex{center + normal},
+            };
+            spoke.closed = true;
+            spokes |= Geo::Polygons{Geo::Polylines{std::move(spoke)}};
+        }
+        bridge_ = cashedFrame & spokes;
+    }
+    // cut: кольцо режется спицами КАК ПУТЬ -- прежний AddOpenSubject.
+    previewPaths = Geo::clipOpen(Geo::ClipType_::Difference, cashedPath, bridge_);
+    painterPath = previewPaths.toPath();
+    if(isEmpty == -1)
+        isEmpty = previewPaths.empty();
+    if(static_cast<bool>(isEmpty) != previewPaths.empty()) {
+        isEmpty = previewPaths.empty();
+        changeColor();
+    }
+    update();
+}
+
+QRectF PreviewItem::boundingRect() const {
+    return painterPath.boundingRect().united(sourcePath.boundingRect());
+}
+
+} // namespace Thermal
+
+#include "moc_thermal_previewitem.cpp"

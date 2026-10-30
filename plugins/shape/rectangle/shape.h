@@ -1,0 +1,97 @@
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ *******************************************************************************/
+#pragma once
+
+#include "editor.h"
+#include "gi.h"
+#include "shape.h"
+#include "shapepluginin.h"
+
+namespace ShRect {
+
+class Shape final : public Shapes::AbstractShape {
+    friend class Model;
+
+public:
+    explicit Shape(Shapes::Plugin* plugin, QPointF pt1 = {}, QPointF pt2 = {});
+    ~Shape() override = default;
+
+    // QGraphicsItem interface
+    int type() const override { return Gi::Type::ShRectangle; }
+
+    // AbstractShape interface
+    QString name() const override;
+    QIcon icon() const override;
+    void setPt(const QPointF& pt) override;
+
+    enum PointEnum {
+        Center,
+        Point1,
+        Point2,
+        Point3,
+        Point4,
+        PtCount,
+        Width = PtCount, // model
+        Height,          // model
+    };
+
+    enum { // якорь изменения размера, комбинации Qt::Alignment (как у ShTxt)
+        // clang-format off
+        BotCenter   = Qt::AlignBottom | Qt::AlignHCenter,
+        BotLeft     = Qt::AlignBottom | Qt::AlignLeft,
+        BotRight    = Qt::AlignBottom | Qt::AlignRight,
+
+        CenterCenter = Qt::AlignHCenter | Qt::AlignVCenter,
+        CenterLeft   = Qt::AlignVCenter | Qt::AlignLeft,
+        CenterRight  = Qt::AlignVCenter | Qt::AlignRight,
+
+        TopCenter   = Qt::AlignTop | Qt::AlignHCenter,
+        TopLeft     = Qt::AlignTop | Qt::AlignLeft,
+        TopRight    = Qt::AlignTop | Qt::AlignRight,
+        // clang-format on
+    };
+
+    int anchor{BotLeft};
+
+    // Новый размер (NaN — не менять) с якорной точкой/кромкой на месте.
+    void setSize(double w, double h);
+
+    void serialize(Serial::Writer& sb) const override { Serial::writeInto(sb, *this); }
+    void deserialize(std::string_view json) override { Serial::loadInto(json, *this); }
+
+protected:
+    void rebuild() override;
+};
+
+class Plugin final : public Shapes::Plugin {
+    Q_OBJECT
+    Q_PLUGIN_METADATA(IID ShapePlugin_iid FILE "description.json")
+    Q_INTERFACES(Shapes::Plugin)
+
+    Editor editor_{this};
+
+public:
+    // Shapes::Plugin interface *
+    uint32_t type() const override { return Gi::Type::ShRectangle; }
+    std::string_view typeName() const override { return "Rectangle"; }
+    QIcon icon() const override { return QIcon::fromTheme(u"draw-rectangle"_s); }
+    Shapes::AbstractShape* createShape(const QPointF& point = {}) override {
+        auto shape = new Shape{
+            this,
+            point, point + QPointF{1, 1}
+        };
+        editor_.add(shape);
+        return shape;
+    }
+    Editor* editor() override { return &editor_; };
+};
+
+} // namespace ShRect

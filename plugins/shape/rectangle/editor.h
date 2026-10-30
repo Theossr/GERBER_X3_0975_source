@@ -1,0 +1,75 @@
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ *******************************************************************************/
+#pragma once
+
+#include "shapepluginin.h"
+#include <QAbstractTableModel>
+#include <QRadioButton>
+#include <QTableView>
+
+namespace ShRect {
+
+class Shape;
+
+class Model : public QAbstractTableModel {
+    Q_OBJECT
+    friend class Shape;
+    QStringList headerData_{
+        tr(" Center"),
+        tr(" Point 1"),
+        tr(" Point 2"),
+        tr(" Point 3"),
+        tr(" Point 4"),
+        tr(" Width"),
+        tr(" Height"),
+    };
+
+public:
+    Model(QObject* parent);
+    virtual ~Model();
+
+    // QAbstractItemModel interface
+    int rowCount(const QModelIndex& = {}) const override { return headerData_.size(); }
+    int columnCount(const QModelIndex& = {}) const override { return 2; }
+    QVariant data(const QModelIndex& index, int role) const override;
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
+    Qt::ItemFlags flags(const QModelIndex& /*index*/) const override { return Qt::ItemIsEditable | Qt::ItemIsEnabled; }
+    bool setData(const QModelIndex& index, const QVariant& value, int role) override;
+
+    std::vector<Shape*> shapes;
+};
+
+class Editor : public Shapes::Editor {
+    Q_OBJECT
+
+    QTableView* view;
+    // сетка якоря 3x3 (как выравнивание у текстового плагина)
+    QRadioButton *rb_tl{}, *rb_tc{}, *rb_tr{};
+    QRadioButton *rb_lc{}, *rb_cc{}, *rb_rc{};
+    QRadioButton *rb_bl{}, *rb_bc{}, *rb_br{};
+    bool resetFl{}; // подавление обратной связи при синхронизации кнопок
+
+    int anchor() const;
+    void updateAnchor();
+
+public:
+    Editor(Shapes::Plugin* plugin);
+
+    void add(Shapes::AbstractShape* shape) override;
+    void remove(Shapes::AbstractShape* shape) override;
+    void updateData() override;
+
+    ~Editor() override = default;
+    Model* model;
+    Shapes::Plugin* plugin;
+};
+
+} // namespace ShRect

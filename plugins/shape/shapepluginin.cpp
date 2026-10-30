@@ -1,0 +1,45 @@
+// This is an open source non-commercial project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++, C#, and Java: https://pvs-studio.com
+#include "shapepluginin.h"
+#include "app.h"
+#include "project.h"
+
+namespace Shapes {
+
+void Plugin::addPoint(const QPointF& point) {
+    if(item == nullptr) {
+        item = createShape(point);
+        App::project().addShape(item);
+    } else if(!item->addPt(point)) {
+        item->setSelected(true);
+        item = nullptr;
+    }
+}
+
+void Plugin::updPoint(const QPointF& point) {
+    if(item) item->setPt(point);
+}
+
+void Plugin::finalizeShape() {
+    if(item) {
+        item->addPt({std::nan(""), std::nan("")});
+        item->setSelected(true);
+        item = nullptr;
+    }
+    emit actionUncheck();
+}
+
+Shapes::Plugin::Plugin() = default;
+
+void Plugin::createMainMenu(QMenu& menu, FileTree::View* tv) {
+    menu.addAction(QIcon::fromTheme(u"edit-delete"_s), QObject::tr("&Delete All Shapes"), [tv] {
+        if(QMessageBox::question(tv, {}, QObject::tr("Really?"), QMessageBox::Yes, QMessageBox::No) == QMessageBox::Yes)
+            tv->closeFiles();
+    });
+}
+
+QString Plugin::folderName() const { return QObject::tr("Shapes"); }
+
+} // namespace Shapes
+
+#include "moc_shapepluginin.cpp"

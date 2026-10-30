@@ -1,0 +1,731 @@
+// This is an open source non-commercial project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++, C#, and Java: https://pvs-studio.com
+
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ ********************************************************************************/
+// #include "a_pch.h "
+#include "settingsdialog.h"
+#include "abstract_fileplugin.h"
+#include "colorselector.h"
+#include "gc_settings.h"
+#include "gi_point.h"
+#include "graphicsview.h"
+#include "mainwindow.h"
+#include "openglcheck.h"
+
+#include <QDesktopServices>
+#include <QtWidgets>
+
+const int gridColor = 100;
+
+const QColor defaultColor[GuiColors::Count]{
+    QColor(),                                     // Background
+    QColor(255, 255, 0, 120),                     // Pin
+    QColor(Qt::gray),                             // CutArea
+    QColor(gridColor, gridColor, gridColor, 50),  // Grid1
+    QColor(gridColor, gridColor, gridColor, 100), // Grid5
+    QColor(gridColor, gridColor, gridColor, 200), // Grid10
+    QColor(),                                     // Hole
+    QColor(0, 255, 0, 120),                       // Home
+    QColor(Qt::black),                            // ToolPath
+    QColor(255, 0, 0, 120),                       // Zero
+    QColor(Qt::red)                               // G0
+};
+
+const QString colorName[GuiColors::Count]{
+    QObject::tr("Background"),
+    QObject::tr("Pin"),
+    QObject::tr("CutArea"),
+    QObject::tr("Grid 0.1"),
+    QObject::tr("Grid 0.5"),
+    QObject::tr("Grid 1.0"),
+    QObject::tr("Hole"),
+    QObject::tr("Home"),
+    QObject::tr("ToolPath"),
+    QObject::tr("Zero"),
+    QObject::tr("G0"),
+};
+
+class ModelSettings : public QAbstractListModel {
+    std::vector<QWidget*> data_;
+
+public:
+    ModelSettings(QObject* parent = nullptr)
+        : QAbstractListModel{parent} { }
+
+    virtual ~ModelSettings() { }
+
+    // QAbstractItemModel interface
+    int rowCount(const QModelIndex& /*parent*/) const override { return data_.size(); }
+    int columnCount(const QModelIndex& /*parent*/) const override { return 1; }
+    QVariant data(const QModelIndex& index, int role) const override {
+        if(role == Qt::DisplayRole)
+            return data_[index.row()]->windowTitle();
+        return {};
+    }
+    void addWidget(QWidget* w) { data_.emplace_back(w); }
+};
+
+////////////////////////////////////////////////////////////////////////////
+/// \brief SettingsDialog::SettingsDialog
+/// \param parent
+/// \param tab
+///
+SettingsDialog::SettingsDialog(QWidget* parent, int tab)
+    : QDialog{parent} {
+    ui.setupUi(this);
+
+    // Порядок важен: available() короткозамыкает проверку, чтобы на машине с
+    // битым драйвером не дёргать GL из-за одной галочки в настройках.
+    ui.chbxOpenGl->setEnabled(OpenGlCheck::available() && QOpenGLContext::supportsThreadedOpenGL());
+    if(const auto hint = OpenGlCheck::howToEnable(); !hint.isEmpty())
+        ui.chbxOpenGl->setToolTip(hint);
+    else
+        ui.chbxOpenGl->setToolTip(OpenGlCheck::report());
+
+    for(int i{}; i < GuiColors::Count; ++i) {
+        ui.formLayout->setWidget(i, QFormLayout::FieldRole, new ColorSelector{App::settings().guiColor_[i], defaultColor[i], ui.gbxColor});
+        ui.formLayout->setWidget(i, QFormLayout::LabelRole, new QLabel{colorName[i] + u":"_s, ui.gbxColor});
+    }
+
+    connect(ui.cbxFontSize, &QComboBox::currentTextChanged, [](const QString& fontSize) {
+        qApp->setStyleSheet(qApp->styleSheet().replace(QRegularExpression(uR"(font-size:\s*\d+)"_s), u"font-size: "_s + fontSize));
+        QFont f;
+        f.setPointSize(fontSize.toInt());
+        qApp->setFont(f);
+    });
+
+    // Language
+    ui.cbxLanguage->addItem(u"English"_s, u"en"_s);
+    ui.cbxLanguage->addItem(u"Русский"_s, u"ru"_s);
+    ui.cbxLanguage->addItem(u"中文"_s, u"zh"_s);
+
+    settings.beginGroup(u"MainWindow"_s);
+    QString locale(settings.value(u"locale"_s).toString());
+    settings.endGroup();
+
+    for(int i{}; i < ui.cbxLanguage->count(); ++i) {
+        if(ui.cbxLanguage->itemData(i).toString() == locale) {
+            ui.cbxLanguage->setCurrentIndex(i);
+            langIndex = i;
+            break;
+        }
+    }
+
+    connect(ui.cbxLanguage, qOverload<int>(&QComboBox::currentIndexChanged), [this](int index) {
+        const QString locale(ui.cbxLanguage->itemData(index).toString());
+        MainWindow::translate(locale);
+        settings.beginGroup(u"MainWindow"_s);
+        settings.setValue(u"locale"_s, locale);
+        settings.endGroup();
+    });
+
+    ui.labelAPIcon->setPixmap(QIcon::fromTheme(u"snap-nodes-cusp"_s).pixmap(ui.labelAPIcon->size()));
+
+    tabs.reserve(App::filePlugins().size() + 1); // NOTE +1 for GCode
+
+    // auto model = new ModelSettings{listView};
+    {
+        auto tab = new GCode::Tab{this};
+        tabs.emplace_back(tab);
+        ui.tabwMain->addTab(tab, tab->windowTitle());
+        tab->readSettings(settings);
+    }
+
+    for(auto& [type, ptr]: App::filePlugins()) {
+        auto tab = ptr->createSettingsTab(this);
+        if(!tab) continue;
+
+        // model->addWidget(tab);
+        // auto gbx = new QGroupBox{tab->windowTitle(), this};
+        // auto lay = new QHBoxLayout{gbx};
+        // lay->addWidget(tab);
+        // verticalLayout_3->addWidget(gbx);
+
+        tabs.emplace_back(tab);
+        ui.tabwMain->addTab(tab, tab->windowTitle());
+        tab->readSettings(settings);
+    }
+
+    // listView->setModel(model);
+
+    readSettings();
+    readSettingsDialog();
+    if(tab > -1)
+        ui.tabwMain->setCurrentIndex(tab);
+
+    { // Open Settings Folder
+        button = new QPushButton{tr("Open Settings Folder"), ui.buttonBox};
+        button->setIcon(QIcon::fromTheme(u"folder"_s));
+        button->setMinimumWidth(QFontMetrics(font()).boundingRect(button->text()).width() + 32);
+        ui.buttonBox->addButton(button, QDialogButtonBox::ResetRole);
+        connect(button, &QPushButton::clicked, [] { QDesktopServices::openUrl(QUrl(App::settingsPath(), QUrl::TolerantMode)); });
+    }
+
+    ui.buttonBox->button(QDialogButtonBox::Ok)->setIcon(QIcon::fromTheme(u"dialog-ok-apply"_s));
+    ui.buttonBox->button(QDialogButtonBox::Cancel)->setIcon(QIcon::fromTheme(u"dialog-cancel"_s));
+}
+
+SettingsDialog::~SettingsDialog() { saveSettingsDialog(); }
+
+void SettingsDialog::readSettings() {
+    /*GUI*/
+
+    settings.beginGroup(u"Viewer"_s);
+    settings.getValue(ui.chbxAntialiasing);
+    settings.getValue(ui.chbxOpenGl);
+    App::settings().scaleHZMarkers_
+        = settings.getValue(ui.chbxScaleHZMarkers, App::settings().scaleHZMarkers_);
+    App::settings().scalePinMarkers_
+        = settings.getValue(ui.chbxScalePinMarkers, App::settings().scalePinMarkers_);
+    App::settings().guiSmoothScSh_
+        = settings.getValue(ui.chbxSmoothScSh, App::settings().guiSmoothScSh_);
+    App::settings().animSelection_
+        = settings.getValue(ui.chbxAnimSelection, App::settings().animSelection_);
+    App::settings().theme_
+        = settings.getValue(ui.cbxTheme, App::settings().theme_);
+    App::settings().accentColor_
+        = QColor{settings.value(u"AccentColor"_s, App::settings().accentColor_.name(QColor::HexArgb)).toString()};
+    settings.endGroup();
+
+    // Маркеры уже созданы (конструктор MainWindow), а настройку прочитали
+    // только сейчас -- применяем её к ним.
+    Gi::applyMarkersScaleMode();
+
+    settings.beginGroup(u"Color"_s);
+    for(int i{}; i < GuiColors::Count; ++i)
+        App::settings().guiColor_[i]
+            = settings.value(
+                          EnumHelper::toString(static_cast<GuiColors::Name>(i)),
+                          App::settings().guiColor_[i].name(QColor::HexArgb))
+                  .toString();
+
+    settings.endGroup();
+
+    settings.beginGroup(u"Application"_s);
+    const QString fontSize(settings.value(u"FontSize"_s, u"8"_s).toString());
+    qApp->setStyleSheet(u"QWidget {font-size: "_s + fontSize + u"pt}"_s);
+    ui.cbxFontSize->setCurrentText(fontSize);
+    settings.endGroup();
+
+    /*cl::Clipper64*/
+    settings.beginGroup(u"cl::Clipper64"_s);
+    App::settings().clpMinCircleSegmentLength_
+        = settings.getValue(ui.dsbxMinCircleSegmentLength, App::settings().clpMinCircleSegmentLength_);
+    App::settings().clpMinCircleSegments_
+        = settings.getValue(ui.sbxMinCircleSegments, App::settings().clpMinCircleSegments_);
+    settings.endGroup();
+
+    /*Markers*/
+    settings.beginGroup(u"Home"_s);
+    settings.getValue(u"homeOffset"_s, App::settings().mrkHomeOffset_);
+    settings.getValue(u"pinOffset"_s, App::settings().mrkPinOffset_, QPointF(6, 6));
+    settings.getValue(u"zeroOffset"_s, App::settings().mrkZeroOffset_);
+    ui.dsbxHomeX->setValue(App::settings().mrkHomeOffset_.x());
+    ui.dsbxHomeY->setValue(App::settings().mrkHomeOffset_.y());
+    ui.dsbxPinX->setValue(App::settings().mrkPinOffset_.x());
+    ui.dsbxPinY->setValue(App::settings().mrkPinOffset_.y());
+    ui.dsbxZeroX->setValue(App::settings().mrkZeroOffset_.x());
+    ui.dsbxZeroY->setValue(App::settings().mrkZeroOffset_.y());
+    settings.getValue(ui.cbxHomePos, HomePosition::TopLeft);
+    settings.getValue(ui.cbxZeroPos, HomePosition::TopLeft);
+    settings.endGroup();
+    /*Other*/
+    settings.getValue("inch", App::settings().banana_, false);
+    settings.getValue("snap", App::settings().snap_, false);
+    for(auto tab: tabs)
+        tab->readSettings(settings);
+}
+
+void SettingsDialog::saveSettings() {
+    /*GUI*/
+    settings.beginGroup(u"Viewer"_s);
+    if(settings.value(u"chbxOpenGl"_s).toBool() != ui.chbxOpenGl->isChecked()) {
+        App::grView().setOpenGL(ui.chbxOpenGl->isChecked());
+        App::grView().viewport()->setObjectName(u"viewport"_s);
+        App::grView().setRenderHint(QPainter::Antialiasing, ui.chbxAntialiasing->isChecked());
+        settings.setValue(ui.chbxOpenGl);
+    }
+    if(settings.value(u"chbxAntialiasing"_s).toBool() != ui.chbxAntialiasing->isChecked()) {
+        const bool aa = ui.chbxAntialiasing->isChecked();
+        App::grView().setRenderHint(QPainter::Antialiasing, aa);
+        // Запас в 2 device-px под сглаживание нужен только при включённом AA.
+        App::grView().setOptimizationFlag(QGraphicsView::DontAdjustForAntialiasing, !aa);
+        settings.setValue(ui.chbxAntialiasing);
+    }
+    App::settings().animSelection_ = settings.setValue(ui.chbxAnimSelection);
+    App::settings().guiSmoothScSh_ = settings.setValue(ui.chbxSmoothScSh);
+    App::settings().scaleHZMarkers_ = settings.setValue(ui.chbxScaleHZMarkers);
+    App::settings().scalePinMarkers_ = settings.setValue(ui.chbxScalePinMarkers);
+    // Маркеры держат экранный размер флагом ItemIgnoresTransformations, а не
+    // масштабированием в paint(), поэтому смену настройки надо применить.
+    Gi::applyMarkersScaleMode();
+    App::settings().theme_ = settings.setValue(ui.cbxTheme);
+    settings.setValue(u"AccentColor"_s, App::settings().accentColor_.name(QColor::HexArgb));
+    settings.endGroup();
+
+    settings.beginGroup(u"Color"_s);
+    for(int i{}; i < GuiColors::Count; ++i)
+        settings.setValue(EnumHelper::toString(static_cast<GuiColors::Name>(i)), App::settings().guiColor_[i].name(QColor::HexArgb));
+    settings.endGroup();
+
+    settings.beginGroup(u"Application"_s);
+    settings.setValue(u"FontSize"_s, ui.cbxFontSize->currentText());
+    settings.endGroup();
+
+    /*cl::Clipper64*/
+    settings.beginGroup(u"cl::Clipper64"_s);
+    App::settings().clpMinCircleSegmentLength_ = settings.setValue(ui.dsbxMinCircleSegmentLength);
+    App::settings().clpMinCircleSegments_ = settings.setValue(ui.sbxMinCircleSegments);
+    settings.endGroup();
+
+    /*Markers*/
+    settings.beginGroup(u"Home"_s);
+    App::settings().mrkHomeOffset_ = settings.setValue(u"homeOffset"_s, QPointF(ui.dsbxHomeX->value(), ui.dsbxHomeY->value()));
+    App::settings().mrkHomePos_ = settings.setValue(ui.cbxHomePos);
+    App::settings().mrkPinOffset_ = settings.setValue(u"pinOffset"_s, QPointF(ui.dsbxPinX->value(), ui.dsbxPinY->value()));
+    App::settings().mrkZeroOffset_ = settings.setValue(u"zeroOffset"_s, QPointF(ui.dsbxZeroX->value(), ui.dsbxZeroY->value()));
+    App::settings().mrkZeroPos_ = settings.setValue(ui.cbxZeroPos);
+    settings.endGroup();
+
+    /*Other*/
+    settings.setValue("inch", App::settings().banana_);
+    settings.setValue("snap", App::settings().snap_);
+    for(auto tab: tabs)
+        tab->writeSettings(settings);
+}
+
+void SettingsDialog::readSettingsDialog() {
+    settings.beginGroup(u"SettingsDialog"_s);
+    if(auto geometry{settings.value(u"geometry"_s).toByteArray()}; geometry.size())
+        restoreGeometry(geometry);
+    settings.getValue(ui.tabwMain);
+    settings.endGroup();
+}
+
+void SettingsDialog::saveSettingsDialog() {
+    settings.beginGroup(u"SettingsDialog"_s);
+    settings.setValue(u"geometry"_s, saveGeometry());
+    settings.setValue(ui.tabwMain);
+    settings.endGroup();
+}
+
+void SettingsDialog::translator(QApplication* app, const QString& path) {
+    if(QFile::exists(path)) {
+        QTranslator* pTranslator = new QTranslator{qApp};
+        if(pTranslator->load(path))
+            app->installTranslator(pTranslator);
+        else
+            delete pTranslator;
+    }
+}
+
+void SettingsDialog::reject() {
+    readSettings();
+
+    if(!isVisible())
+        MainWindow::updateTheme();
+
+    QDialog::reject();
+}
+
+void SettingsDialog::accept() {
+    if(isVisible() && !ui.buttonBox->button(QDialogButtonBox::Ok)->hasFocus())
+        return;
+
+    saveSettings();
+
+    if(langIndex != ui.cbxLanguage->currentIndex())
+        QMessageBox::information(this, {}, tr("The complete translation of the application will take\n"
+                                              "effect after restarting the application."));
+    MainWindow::updateTheme();
+    QDialog::accept();
+}
+
+void SettingsDialog::showEvent(QShowEvent* event) {
+    int width{};
+    for(int i{}; i < ui.tabwMain->tabBar()->count(); ++i)
+        width += ui.tabwMain->tabBar()->tabRect(i).width();
+    resize(width + 20, 10);
+    button->setMaximumHeight(ui.buttonBox->button(QDialogButtonBox::Ok)->height());
+
+    QDialog::showEvent(event);
+}
+
+bool SettingsDialog::eventFilter(QObject* watched, QEvent* event) {
+    if(event->type() == QEvent::KeyPress)
+        return false;
+    return QDialog::eventFilter(watched, event);
+}
+
+void SettingsDialog::Ui::setupUi(QDialog* SettingsDialog) {
+    if(SettingsDialog->objectName().isEmpty())
+        SettingsDialog->setObjectName(u"SettingsDialog"_s);
+    SettingsDialog->resize(392, 517);
+    gridLayout_2 = new QGridLayout{SettingsDialog};
+    gridLayout_2->setObjectName(u"gridLayout_2"_s);
+    gridLayout_2->setContentsMargins(6, 6, 6, 6);
+    buttonBox = new QDialogButtonBox{SettingsDialog};
+    buttonBox->setObjectName(u"buttonBox"_s);
+    buttonBox->setOrientation(Qt::Horizontal);
+    buttonBox->setStandardButtons(QDialogButtonBox::Cancel | QDialogButtonBox::Ok);
+
+    gridLayout_2->addWidget(buttonBox, 1, 1, 1, 1);
+
+    tabwMain = new QTabWidget{SettingsDialog};
+    tabwMain->setObjectName(u"tabwMain"_s);
+    tabGui = new QWidget();
+    tabGui->setObjectName(u"tabGui"_s);
+    verticalLayout_8 = new QVBoxLayout{tabGui};
+    verticalLayout_8->setObjectName(u"verticalLayout_8"_s);
+    verticalLayout_8->setContentsMargins(6, 6, 6, 6);
+    groupBox = new QGroupBox{tabGui};
+    groupBox->setObjectName(u"groupBox"_s);
+    gridLayout = new QGridLayout{groupBox};
+    gridLayout->setObjectName(u"gridLayout"_s);
+    gridLayout->setContentsMargins(6, 9, 6, 6);
+
+    cbxFontSize = new QComboBox{groupBox};
+    cbxFontSize->addItems({u"7"_s, u"8"_s, u"9"_s, u"10"_s, u"11"_s, u"12"_s, u"13"_s, u"14"_s});
+    cbxFontSize->setObjectName(u"cbxFontSize"_s);
+    QSizePolicy sizePolicy{QSizePolicy::MinimumExpanding, QSizePolicy::Fixed};
+    sizePolicy.setHorizontalStretch(0);
+    sizePolicy.setVerticalStretch(0);
+    sizePolicy.setHeightForWidth(cbxFontSize->sizePolicy().hasHeightForWidth());
+    cbxFontSize->setSizePolicy(sizePolicy);
+
+    gridLayout->addWidget(cbxFontSize, 0, 1, 1, 1);
+
+    cbxLanguage = new QComboBox{groupBox};
+    cbxLanguage->setObjectName(u"cbxLanguage"_s);
+
+    gridLayout->addWidget(cbxLanguage, 1, 1, 1, 1);
+
+    label_17 = new QLabel{groupBox};
+    label_17->setObjectName(u"label_17"_s);
+    label_17->setAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+
+    gridLayout->addWidget(label_17, 1, 0, 1, 1);
+
+    fontSizeLabel = new QLabel{groupBox};
+    fontSizeLabel->setObjectName(u"fontSizeLabel"_s);
+    fontSizeLabel->setAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+
+    gridLayout->addWidget(fontSizeLabel, 0, 0, 1, 1);
+
+    cbxTheme = new QComboBox{groupBox};
+    cbxTheme->setObjectName(u"cbxTheme"_s);
+
+    gridLayout->addWidget(cbxTheme, 2, 1, 1, 1);
+
+    label = new QLabel{groupBox};
+    label->setObjectName(u"label"_s);
+    label->setAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+
+    gridLayout->addWidget(label, 2, 0, 1, 1);
+
+    accentColorSelector = new ColorSelector{App::settings().accentColor_, QColor(61, 174, 233), groupBox};
+    accentColorSelector->setObjectName(u"accentColorSelector"_s);
+
+    gridLayout->addWidget(accentColorSelector, 3, 1, 1, 1);
+
+    labelAccentColor = new QLabel{groupBox};
+    labelAccentColor->setObjectName(u"labelAccentColor"_s);
+    labelAccentColor->setAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+
+    gridLayout->addWidget(labelAccentColor, 3, 0, 1, 1);
+
+    verticalLayout_8->addWidget(groupBox);
+
+    gbViewer = new QGroupBox{tabGui};
+    gbViewer->setObjectName(u"gbViewer"_s);
+    verticalLayout_2 = new QVBoxLayout{gbViewer};
+    verticalLayout_2->setObjectName(u"verticalLayout_2"_s);
+    verticalLayout_2->setContentsMargins(6, 9, 6, 6);
+    chbxOpenGl = new QCheckBox{gbViewer};
+    chbxOpenGl->setObjectName(u"chbxOpenGl"_s);
+
+    verticalLayout_2->addWidget(chbxOpenGl);
+
+    chbxAntialiasing = new QCheckBox{gbViewer};
+    chbxAntialiasing->setObjectName(u"chbxAntialiasing"_s);
+
+    verticalLayout_2->addWidget(chbxAntialiasing);
+
+    chbxSmoothScSh = new QCheckBox{gbViewer};
+    chbxSmoothScSh->setObjectName(u"chbxSmoothScSh"_s);
+
+    verticalLayout_2->addWidget(chbxSmoothScSh);
+
+    chbxAnimSelection = new QCheckBox{gbViewer};
+    chbxAnimSelection->setObjectName(u"chbxAnimSelection"_s);
+
+    verticalLayout_2->addWidget(chbxAnimSelection);
+
+    gbxColor = new QGroupBox{gbViewer};
+    gbxColor->setObjectName(u"gbxColor"_s);
+    QSizePolicy sizePolicy1{QSizePolicy::Preferred, QSizePolicy::MinimumExpanding};
+    sizePolicy1.setHorizontalStretch(0);
+    sizePolicy1.setVerticalStretch(0);
+    sizePolicy1.setHeightForWidth(gbxColor->sizePolicy().hasHeightForWidth());
+    gbxColor->setSizePolicy(sizePolicy1);
+    formLayout = new QFormLayout{gbxColor};
+    formLayout->setObjectName(u"formLayout"_s);
+    formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+    formLayout->setContentsMargins(6, 9, 6, 6);
+
+    verticalLayout_2->addWidget(gbxColor);
+
+    verticalLayout_8->addWidget(gbViewer);
+
+    tabwMain->addTab(tabGui, QString());
+    tabUtils = new QWidget();
+    tabUtils->setObjectName(u"tabUtils"_s);
+    verticalLayout = new QVBoxLayout{tabUtils};
+    verticalLayout->setObjectName(u"verticalLayout"_s);
+    groupBox_5 = new QGroupBox{tabUtils};
+    groupBox_5->setObjectName(u"groupBox_5"_s);
+    gridLayout_3 = new QGridLayout{groupBox_5};
+    gridLayout_3->setObjectName(u"gridLayout_3"_s);
+    gridLayout_3->setContentsMargins(6, 9, 6, 6);
+    label_6 = new QLabel{groupBox_5};
+    label_6->setObjectName(u"label_6"_s);
+    label_6->setAlignment(Qt::AlignBottom | Qt::AlignHCenter);
+
+    gridLayout_3->addWidget(label_6, 0, 1, 1, 1);
+
+    label_8 = new QLabel{groupBox_5};
+    label_8->setObjectName(u"label_8"_s);
+    label_8->setAlignment(Qt::AlignBottom | Qt::AlignHCenter);
+
+    gridLayout_3->addWidget(label_8, 0, 2, 1, 1);
+
+    label_9 = new QLabel{groupBox_5};
+    label_9->setObjectName(u"label_9"_s);
+    label_9->setAlignment(Qt::AlignBottom | Qt::AlignHCenter);
+
+    gridLayout_3->addWidget(label_9, 0, 3, 1, 1);
+
+    label_7 = new QLabel{groupBox_5};
+    label_7->setObjectName(u"label_7"_s);
+    label_7->setAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+
+    gridLayout_3->addWidget(label_7, 1, 0, 1, 1);
+
+    dsbxZeroX = new DoubleSpinBox{groupBox_5};
+    dsbxZeroX->setObjectName(u"dsbxZeroX"_s);
+    dsbxZeroX->setMinimumSize(QSize(100, 0));
+    dsbxZeroX->setDecimals(3);
+    dsbxZeroX->setMinimum(-1000.0);
+    dsbxZeroX->setMaximum(1000.0);
+
+    gridLayout_3->addWidget(dsbxZeroX, 1, 1, 1, 1);
+
+    dsbxZeroY = new DoubleSpinBox{groupBox_5};
+    dsbxZeroY->setObjectName(u"dsbxZeroY"_s);
+    dsbxZeroY->setMinimumSize(QSize(100, 0));
+    dsbxZeroY->setDecimals(3);
+    dsbxZeroY->setMinimum(-1000.0);
+    dsbxZeroY->setMaximum(1000.0);
+
+    gridLayout_3->addWidget(dsbxZeroY, 1, 2, 1, 1);
+
+    cbxZeroPos = new QComboBox{groupBox_5};
+    cbxZeroPos->setObjectName(u"cbxZeroPos"_s);
+    sizePolicy.setHeightForWidth(cbxZeroPos->sizePolicy().hasHeightForWidth());
+    cbxZeroPos->setSizePolicy(sizePolicy);
+
+    gridLayout_3->addWidget(cbxZeroPos, 1, 3, 1, 1);
+
+    label_4 = new QLabel{groupBox_5};
+    label_4->setObjectName(u"label_4"_s);
+    label_4->setAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+
+    gridLayout_3->addWidget(label_4, 2, 0, 1, 1);
+
+    dsbxHomeX = new DoubleSpinBox{groupBox_5};
+    dsbxHomeX->setObjectName(u"dsbxHomeX"_s);
+    dsbxHomeX->setMinimumSize(QSize(100, 0));
+    dsbxHomeX->setDecimals(3);
+    dsbxHomeX->setMinimum(-1000.0);
+    dsbxHomeX->setMaximum(1000.0);
+
+    gridLayout_3->addWidget(dsbxHomeX, 2, 1, 1, 1);
+
+    dsbxHomeY = new DoubleSpinBox{groupBox_5};
+    dsbxHomeY->setObjectName(u"dsbxHomeY"_s);
+    dsbxHomeY->setMinimumSize(QSize(100, 0));
+    dsbxHomeY->setDecimals(3);
+    dsbxHomeY->setMinimum(-1000.0);
+    dsbxHomeY->setMaximum(1000.0);
+
+    gridLayout_3->addWidget(dsbxHomeY, 2, 2, 1, 1);
+
+    cbxHomePos = new QComboBox{groupBox_5};
+    cbxHomePos->setObjectName(u"cbxHomePos"_s);
+    sizePolicy.setHeightForWidth(cbxHomePos->sizePolicy().hasHeightForWidth());
+    cbxHomePos->setSizePolicy(sizePolicy);
+
+    gridLayout_3->addWidget(cbxHomePos, 2, 3, 1, 1);
+
+    label_5 = new QLabel{groupBox_5};
+    label_5->setObjectName(u"label_5"_s);
+    label_5->setAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+
+    gridLayout_3->addWidget(label_5, 3, 0, 1, 1);
+
+    dsbxPinX = new DoubleSpinBox{groupBox_5};
+    dsbxPinX->setObjectName(u"dsbxPinX"_s);
+    dsbxPinX->setDecimals(3);
+    dsbxPinX->setMinimum(-1000.0);
+    dsbxPinX->setMaximum(1000.0);
+
+    gridLayout_3->addWidget(dsbxPinX, 3, 1, 1, 1);
+
+    dsbxPinY = new DoubleSpinBox{groupBox_5};
+    dsbxPinY->setObjectName(u"dsbxPinY"_s);
+    dsbxPinY->setDecimals(3);
+    dsbxPinY->setMinimum(-1000.0);
+    dsbxPinY->setMaximum(1000.0);
+
+    gridLayout_3->addWidget(dsbxPinY, 3, 2, 1, 1);
+
+    labelAPIcon = new QLabel{groupBox_5};
+    labelAPIcon->setObjectName(u"labelAPIcon"_s);
+
+    gridLayout_3->addWidget(labelAPIcon, 0, 0, 1, 1);
+
+    verticalLayout->addWidget(groupBox_5);
+
+    chbxScaleHZMarkers = new QCheckBox{tabUtils};
+    chbxScaleHZMarkers->setObjectName(u"chbxScaleHZMarkers"_s);
+
+    verticalLayout->addWidget(chbxScaleHZMarkers);
+
+    chbxScalePinMarkers = new QCheckBox{tabUtils};
+    chbxScalePinMarkers->setObjectName(u"chbxScalePinMarkers"_s);
+
+    verticalLayout->addWidget(chbxScalePinMarkers);
+
+    groupBox_4 = new QGroupBox{tabUtils};
+    groupBox_4->setObjectName(u"groupBox_4"_s);
+    formLayout_3 = new QFormLayout{groupBox_4};
+    formLayout_3->setObjectName(u"formLayout_3"_s);
+    formLayout_3->setLabelAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+    formLayout_3->setContentsMargins(6, 9, 6, 6);
+    minimumCircleSegmentsLabel = new QLabel{groupBox_4};
+    minimumCircleSegmentsLabel->setObjectName(u"minimumCircleSegmentsLabel"_s);
+
+    formLayout_3->setWidget(0, QFormLayout::LabelRole, minimumCircleSegmentsLabel);
+
+    sbxMinCircleSegments = new QSpinBox{groupBox_4};
+    sbxMinCircleSegments->setObjectName(u"sbxMinCircleSegments"_s);
+    sbxMinCircleSegments->setRange(36, 360);
+
+    formLayout_3->setWidget(0, QFormLayout::FieldRole, sbxMinCircleSegments);
+
+    minimumCircleSegmentLengthLabel = new QLabel{groupBox_4};
+    minimumCircleSegmentLengthLabel->setObjectName(u"minimumCircleSegmentLengthLabel"_s);
+
+    formLayout_3->setWidget(1, QFormLayout::LabelRole, minimumCircleSegmentLengthLabel);
+
+    dsbxMinCircleSegmentLength = new DoubleSpinBox{groupBox_4};
+    dsbxMinCircleSegmentLength->setObjectName(u"dsbxMinCircleSegmentLength"_s);
+    dsbxMinCircleSegmentLength->setDecimals(2);
+    dsbxMinCircleSegmentLength->setRange(0.1, 10.0);
+    dsbxMinCircleSegmentLength->setSingleStep(0.05);
+    dsbxMinCircleSegmentLength->setValue(0.50);
+
+    formLayout_3->setWidget(1, QFormLayout::FieldRole, dsbxMinCircleSegmentLength);
+
+    verticalLayout->addWidget(groupBox_4);
+
+    verticalSpacer_2 = new QSpacerItem{20, 40, QSizePolicy::Minimum, QSizePolicy::Expanding};
+
+    verticalLayout->addItem(verticalSpacer_2);
+
+    tabwMain->addTab(tabUtils, QString());
+
+    gridLayout_2->addWidget(tabwMain, 0, 0, 1, 2);
+
+    retranslateUi(SettingsDialog);
+    QObject::connect(buttonBox, SIGNAL(accepted()), SettingsDialog, SLOT(accept()));
+    QObject::connect(buttonBox, SIGNAL(rejected()), SettingsDialog, SLOT(reject()));
+
+    tabwMain->setCurrentIndex(1);
+
+    QMetaObject::connectSlotsByName(SettingsDialog);
+}
+
+void SettingsDialog::Ui::retranslateUi(QDialog* SettingsDialog) {
+    SettingsDialog->setWindowTitle(QCoreApplication::translate("SettingsDialog", "Settings[*]", nullptr));
+    groupBox->setTitle(QCoreApplication::translate("SettingsDialog", "UI", nullptr));
+    label_17->setText(QCoreApplication::translate("SettingsDialog", "Language:", nullptr));
+    fontSizeLabel->setText(QCoreApplication::translate("SettingsDialog", "Font Size:", nullptr));
+    cbxTheme->clear();
+    cbxTheme->addItems({
+        QCoreApplication::translate("SettingsDialog", "System", nullptr),
+        QCoreApplication::translate("SettingsDialog", "Light", nullptr),
+        QCoreApplication::translate("SettingsDialog", "Dark", nullptr),
+    });
+    label->setText(QCoreApplication::translate("SettingsDialog", "Theme:", nullptr));
+    labelAccentColor->setText(QCoreApplication::translate("SettingsDialog", "Accent color:", nullptr));
+    gbViewer->setTitle(QCoreApplication::translate("SettingsDialog", "Viewer", nullptr));
+    chbxOpenGl->setText(QCoreApplication::translate("SettingsDialog", "Open GL", nullptr));
+    chbxAntialiasing->setText(QCoreApplication::translate("SettingsDialog", "Anti aliasing", nullptr));
+    chbxSmoothScSh->setText(QCoreApplication::translate("SettingsDialog", "Smooth scaling / shearing", nullptr));
+    chbxAnimSelection->setText(QCoreApplication::translate("SettingsDialog", "Animated selection for paths", nullptr));
+    gbxColor->setTitle(QCoreApplication::translate("SettingsDialog", "Colors", nullptr));
+    tabwMain->setTabText(tabwMain->indexOf(tabGui), QCoreApplication::translate("SettingsDialog", "UI", nullptr));
+    groupBox_5->setTitle(QCoreApplication::translate("SettingsDialog", "Auto-placement for pins and markers", nullptr));
+    label_6->setText(QCoreApplication::translate("SettingsDialog", "X offset", nullptr));
+    label_8->setText(QCoreApplication::translate("SettingsDialog", "Y offset", nullptr));
+    label_9->setText(QCoreApplication::translate("SettingsDialog", "Place", nullptr));
+    label_7->setText(QCoreApplication::translate("SettingsDialog", "Zero:", nullptr));
+    dsbxZeroX->setPrefix(QString());
+    dsbxZeroX->setSuffix(QCoreApplication::translate("SettingsDialog", " mm", nullptr));
+    dsbxZeroY->setPrefix(QString());
+    dsbxZeroY->setSuffix(QCoreApplication::translate("SettingsDialog", " mm", nullptr));
+
+    QStringList list{
+        QCoreApplication::translate("SettingsDialog", "Top Left", nullptr),
+        QCoreApplication::translate("SettingsDialog", "Top Right", nullptr),
+        QCoreApplication::translate("SettingsDialog", "Bottom Left", nullptr),
+        QCoreApplication::translate("SettingsDialog", "Bottom Right", nullptr),
+        QCoreApplication::translate("SettingsDialog", "Center", nullptr),
+        QCoreApplication::translate("SettingsDialog", "Always Zero", nullptr),
+    };
+
+    cbxZeroPos->clear();
+    cbxZeroPos->addItems(list);
+    label_4->setText(QCoreApplication::translate("SettingsDialog", "Home:", nullptr));
+    dsbxHomeX->setPrefix(QString());
+    dsbxHomeX->setSuffix(QCoreApplication::translate("SettingsDialog", " mm", nullptr));
+    dsbxHomeY->setPrefix(QString());
+    dsbxHomeY->setSuffix(QCoreApplication::translate("SettingsDialog", " mm", nullptr));
+    cbxHomePos->clear();
+    cbxHomePos->addItems(list);
+    label_5->setText(QCoreApplication::translate("SettingsDialog", "Pins:", nullptr));
+    dsbxPinX->setPrefix(QString());
+    dsbxPinX->setSuffix(QCoreApplication::translate("SettingsDialog", " mm", nullptr));
+    dsbxPinY->setPrefix(QString());
+    dsbxPinY->setSuffix(QCoreApplication::translate("SettingsDialog", " mm", nullptr));
+    labelAPIcon->setText(QString());
+    chbxScaleHZMarkers->setText(QCoreApplication::translate("SettingsDialog", "Scale Home/Zero Markers", nullptr));
+    chbxScalePinMarkers->setText(QCoreApplication::translate("SettingsDialog", "Scale Pin Markers", nullptr));
+    groupBox_4->setTitle(QCoreApplication::translate("SettingsDialog", "Clipper2Lib arcs aprox", nullptr));
+    minimumCircleSegmentsLabel->setText(QCoreApplication::translate("SettingsDialog", "Minimum points of circle aproximation:", nullptr));
+    minimumCircleSegmentLengthLabel->setText(QCoreApplication::translate("SettingsDialog", "The minimum length of circle aproximation:", nullptr));
+    dsbxMinCircleSegmentLength->setSuffix(QCoreApplication::translate("SettingsDialog", " mm", nullptr));
+    tabwMain->setTabText(tabwMain->indexOf(tabUtils), QCoreApplication::translate("SettingsDialog", "Utils", nullptr));
+}
+
+#include "moc_settingsdialog.cpp"

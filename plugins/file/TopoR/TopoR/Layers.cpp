@@ -1,0 +1,31 @@
+// This is an open source non-commercial project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++, C#, and Java: https://pvs-studio.com
+#include "Layers.h"
+namespace TopoR {
+
+Layers::Layer::Layer() { }
+Layers::Layer::Layer(const std::string& name, layertype type, Bool compsOutline, double thickness) {
+    //    name = name;
+    //    type = type;
+    //    compsOutline = compsOutline;
+    //    thickness = thickness;
+}
+std::string Layers::Layer::ToString() {
+    return {}; //    return name;
+}
+
+bool Layers::LayerStackUpContains(LayerRef lref) {
+    return {}; //    return (StackUpLayers.empty() ? nullptr : StackUpLayers.Where([&](std::variant</*XML::Null,*/ > r) {
+    //                                                                 return r->name == lref->ReferenceName;
+    //                                                             })
+    //                                                   ->Count())
+    //        > 0;
+}
+bool Layers::LayerUnStackContain(LayerRef lref) {
+    return {}; //    return (UnStackLayers.empty() ? nullptr : UnStackLayers.Where([&](std::variant</*XML::Null,*/ > r) {
+    //                                                                 return r->name == lref->ReferenceName;
+    //                                                             })
+    //                                                   ->Count())
+    //        > 0;
+}
+} // namespace TopoR

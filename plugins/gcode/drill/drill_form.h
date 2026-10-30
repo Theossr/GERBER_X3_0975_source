@@ -1,0 +1,163 @@
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ *******************************************************************************/
+#pragma once
+
+#include "drill_file.h"
+#include "gc_form.h"
+#include "gc_plugin.h"
+
+#include <deque>
+
+namespace Ui {
+class DrillForm;
+}
+
+class QCheckBox;
+
+namespace Drilling {
+
+// using PosOrPath = std::variant<const QPointF, const QPolygonF>;
+// using Key = std::tuple<int, double, bool, QString>;
+// struct Val {
+// std::vector<PosOrPath> posOrPath;
+// Paths64 draw;
+// };
+// using Preview = std::map<Key, Val>;
+
+class Model;
+class Header;
+
+class Form final : public GCode::Form {
+    Q_OBJECT
+
+public:
+    explicit Form(GCode::Plugin* plugin);
+    ~Form() override;
+
+    void updateFiles();
+    static bool canToShow();
+
+private:
+    Ui::DrillForm* ui;
+    class Model* model = nullptr;
+    class AbstractFile* file = nullptr;
+    class Header* header;
+    class QCheckBox* checkBox;
+    GCType worckType = GCType::Drill;
+    GCode::SideOfMilling side = GCode::Inner;
+    // УП, пересчитанные за текущий показ формы: id проекта по toolId, чтобы
+    // повторный Create ЗАМЕНЯЛ их, а не плодил дубли. Четыре карты, а не одна --
+    // ветка пазов (worckType == Drill), ветка простых отверстий ("other", тот
+    // же worckType) и асинхронные ветки Profile/Pocket по отверстиям считают
+    // НЕЗАВИСИМЫЕ pathsMap и могут за один клик дать по файлу на один toolId
+    // из каждой; смешивать их id в одном ключе нельзя.
+    // Сбрасываются в showEvent() -- после закрытия/переоткрытия формы снова add-new.
+    std::map<Tool::ID, int32_t> createdSlotFileIds_;
+    std::map<Tool::ID, int32_t> createdDrillFileIds_;
+    std::map<Tool::ID, int32_t> createdProfileFileIds_;
+    std::map<Tool::ID, int32_t> createdPocketFileIds_;
+
+    void initToolTable();
+
+    void on_cbxFileCurrentIndexChanged();
+    void on_doubleClicked(const QModelIndex& current);
+    void on_selectionChanged(const QItemSelection& selected, const QItemSelection& deselected);
+    void on_customContextMenuRequested(const QPoint& pos);
+    void customContextMenuRequested(const QPoint& pos);
+
+    void pickUpTool();
+    void updateState();
+    //////////
+    void errorOccurred();
+
+    QModelIndexList selectedIndexes() const;
+
+    inline void zoomToSelected();
+
+protected:
+    // FormsUtil interface
+    void computePaths() override;
+    void updateName() override;
+    // Файлы, созданные чужим Creator'ом (Profile/PocketOffset), тоже должны
+    // унести с собой строки таблицы -- поэтому обработчик расширяется.
+    void fileHandler(GCode::File* file) override;
+
+    // Строки таблицы с данными индексами -- в том виде, в каком их надо будет
+    // восстановить при правке.
+    std::vector<RowRef> rowRefs(const std::vector<int>& indexes) const;
+    // Снимает галку "Create" только у перечисленных строк -- зовётся ПОСЛЕ
+    // подтверждения, что УП по ним реально получилась, не раньше.
+    void uncheckRows(const std::vector<RowRef>& rows);
+    // Профиль/карман по отверстиям считает чужой Creator и результат приходит
+    // асинхронно; при этом computePaths() может за один клик прогнать НЕСКОЛЬКО
+    // независимых по toolId прогонов подряд -- каждый следующий стартует, только
+    // дождавшись предыдущего worker'а (startCompute -> stopWorker блокирует), но
+    // их fileReady доставляются позже, все разом, уже после выхода из
+    // computePaths(). Раз состояние одно на форму, а прогонов может быть N,
+    // контекст каждого -- в очереди, а не в одиночных полях; FIFO гарантирован
+    // тем же ожиданием предыдущего worker'а.
+    struct PendingRun {
+        std::vector<RowRef> rows;
+        GCType worckType{};
+        Tool::ID toolId{};
+        QString programName;
+    };
+    std::deque<PendingRun> pendingRuns_;
+    // Плагины с собственной независимой моделью "что сейчас правится" (свои
+    // карты toolId->fileId на каждую ветку) не пользуются единым fileId/
+    // editMode_ базового класса -- он бы не различил несколько программ,
+    // получившихся за один клик.
+    bool autoEnterEditMode() const override { return false; }
+    // QWidget interface
+    void showEvent(QShowEvent* event) override {
+        updateFiles();
+        createdSlotFileIds_.clear();
+        createdDrillFileIds_.clear();
+        createdProfileFileIds_.clear();
+        createdPocketFileIds_.clear();
+        pendingRuns_.clear();
+        // Базовая, а не event->accept(): в GCode::Form::showEvent сбрасывается
+        // режим правки, иначе форма молча перепишет УП из прошлого сеанса.
+        GCode::Form::showEvent(event);
+    }
+    void hideEvent(QHideEvent* event) override;
+
+public:
+    void editFile(GCode::File* file) override;
+};
+
+class Plugin final : public GCode::Plugin {
+    Q_OBJECT
+    Q_PLUGIN_METADATA(IID GCodeInterface_iid FILE "description.json")
+    Q_INTERFACES(GCode::Plugin)
+
+    // GCode::Plugin interface
+    Form form{this};
+
+public:
+    QAction* addAction(QMenu* menu, QToolBar* toolbar) override {
+        auto action = GCode::Plugin ::addAction(menu, toolbar);
+        action->setData(true);
+        return action;
+    }
+    QIcon icon() const override { return QIcon::fromTheme(u"drill-path"_s); }
+    QKeySequence keySequence() const override { return {u"Ctrl+Shift+D"_s}; }
+    QWidget* createForm() override { return &form; }
+    QString gcName() const override { return u"Drilling"_s; }
+    bool canToShow() const override { return Form::canToShow(); }
+    uint32_t type() const override { return DRILLING; }
+    AbstractFile* loadFile(std::string_view json) const override { return Serial::load<File>(json); }
+    std::string_view typeName() const override { return Serial::typeNameOf<File>(); }
+};
+
+} // namespace Drilling
+
+#include "app.h"

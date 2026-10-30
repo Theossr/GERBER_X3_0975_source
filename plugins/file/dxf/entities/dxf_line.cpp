@@ -1,0 +1,56 @@
+// This is an open source non-commercial project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++, C#, and Java: https://pvs-studio.com
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ *******************************************************************************/
+#include "dxf_line.h"
+
+#include <QPainterPath>
+
+namespace Dxf {
+
+void Line::parse(CodeData& code) {
+    do {
+        data.push_back(code);
+        switch(static_cast<DataEnum>(code.code())) {
+        case SubclassMarker     : break;
+        case Thickness          : thickness = code; break;
+        case StartPointX        : startPoint.rx() = code; break;
+        case StartPointY        : startPoint.ry() = code; break;
+        case StartPointZ        : break;
+        case EndPointX          : endPoint.rx() = code; break;
+        case EndPointY          : endPoint.ry() = code; break;
+        case EndPointZ          : break;
+        case ExtrusionDirectionX: break;
+        case ExtrusionDirectionY: break;
+        case ExtrusionDirectionZ: break;
+        default                 : Entity::parse(code);
+        }
+        code = sp->nextCode();
+    } while(code.code() != 0);
+}
+
+Entity::Type Line::type() const { return Type::LINE; }
+
+DxfGo Line::toGo() const {
+    if(thickness) qCritical() << thickness;
+    // TODO ClipperOffset offset;
+    // offset.AddPath(p, cl::JoinType::Round, cl::EndType::Round);
+    // paths = offset.Execute(thickness * uScale);
+    Geo::Polyline curve{{startPoint}, {endPoint}};
+    DxfGo go{
+        id, std::move(curve)
+        //, paths
+    };
+    go.type = DxfGo::Type(DxfGo::FlDrawn | DxfGo::Line);
+    return go;
+}
+
+} // namespace Dxf

@@ -1,0 +1,276 @@
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ ********************************************************************************/
+#pragma once
+
+#include "abstract_file.h"
+#include "gc_post.h"
+#include "gc_types.h"
+#include "geo/util.h"
+
+#include <QList>
+#include <QString>
+
+class Project;
+
+namespace GCode {
+
+class GcFileProxy;
+
+// Пересобрать lines_ у всех G-code файлов проекта. Вызывать сразу же, как только
+// меняется параметр, влияющий на генерацию текста G-кода (сторона платы, safeZ/
+// clearence/plunge, положение Home/Zero/Pin и т.п.) — иначе lines_ останется
+// устаревшим до следующего явного "Save Toolpath".
+void regenerateGCodeFiles();
+
+class File : public AbstractFile {
+    // friend class ::Project;
+    friend class GcFileProxy;
+
+protected:
+    // Производные от gcp (заполняет конструктор от Params) — не сериализуются,
+    // как и раньше: после загрузки их восстанавливает regenerate().
+    [[= Serial::skip]] double feedRate{};
+    [[= Serial::skip]] double plungeRate{};
+    [[= Serial::skip]] int spindleSpeed{};
+    [[= Serial::skip]] int toolType{};
+    [[= Serial::skip]] QString strFeed;
+    [[= Serial::skip]] QString strPlungeFeed;
+    [[= Serial::skip]] QString strSpindle;
+    Params gcp; ////
+
+    // Имя, которое дал программе пользователь (текст поля Name в форме), без
+    // суффикса инструмента. Отдельно от name_, потому что тот работает на две
+    // ставки: до сохранения это метка в дереве, после save() -- путь на диске.
+    // Опираться на name_ при поиске коллизий и при восстановлении формы нельзя.
+    QString programName_;
+
+    // Видимость файлов проекта на момент расчёта: id файла -> был ли видим.
+    // Снимок, а не список использованных: восстановить надо ровно ту картину,
+    // которая была перед нажатием Create, включая погашенные файлы.
+    std::map<int32_t, bool> visibility_;
+
+public:
+    File(Params&& newGcp)
+        : feedRate{newGcp.feedRate()}
+        , plungeRate{newGcp.plungeRate()}
+        , spindleSpeed{newGcp.spindleSpeed()}
+        , toolType{newGcp.toolType()}
+        , strFeed{u'F' + formatValue(feedRate)}
+        , strPlungeFeed{u'F' + formatValue(plungeRate)}
+        , strSpindle{u'S' + formatValue(spindleSpeed)}
+        , gcp{std::move(newGcp)} {
+        setSide(gcp.params[Params::FileSide]);
+    }
+
+    File() = default;
+    ~File() override = default;
+
+    std::vector<QString> gCodeText() const { return lines_; }
+    const Tool& tool() const { return gcp.tool(); }
+    const Params& params() const { return gcp; }
+
+    const QString& programName() const { return programName_; }
+    void setProgramName(const QString& name) { programName_ = name; }
+
+    const std::map<int32_t, bool>& visibility() const { return visibility_; }
+    void setVisibility(std::map<int32_t, bool> visibility) { visibility_ = std::move(visibility); }
+
+    static QString getLastDir();
+    static void setLastDir(QString dirPath);
+
+    bool save(const QString& name);
+
+    // Пересобрать lines_ (текст G-кода) из текущих параметров: стороны платы,
+    // безопасной высоты, зазора, глубины подвода и т.п. Нужно вызывать сразу же,
+    // как только один из этих параметров меняется у уже созданного файла —
+    // иначе lines_ останется устаревшим до следующего явного "Save Toolpath".
+    // Части текста: «сохранить всё в один файл» пишет шапку только у первого
+    // файла, а концовку -- только у последнего.
+    enum Section : unsigned {
+        Header = 1,
+        Body = 2,
+        Footer = 4,
+        All = Header | Body | Footer,
+    };
+    void regenerate(unsigned sections = All);
+
+    static void ensureDefaultScripts();
+
+    // Расширение прокси для скрипта: объект, доступный как file.ext. Плагин
+    // отдаёт сюда то, чего в общем прокси нет (Profile -- геометрию мостов).
+    virtual QObject* createJsExtension(GcFileProxy& /*proxy*/, QJSEngine& /*engine*/) { return nullptr; }
+
+    // Комментарий в диалекте текущего поста.
+    static QString comment(const QString& text);
+    // Итоговый текст файла (склейка строк, нумерация N по посту).
+    static QString renderText(const std::vector<QString>& lines);
+
+    FileTree::Node* node() override;
+
+    // Сторона хранится ДВАЖДЫ: полем файла и параметром УП. Поле читают все, а
+    // параметр переживает сохранение проекта -- из него сторону берёт
+    // конструктор при загрузке. Разъехаться им нельзя: выбор в дереве иначе не
+    // дожил бы до следующего открытия.
+    void setSide(Side side) override;
+
+protected:
+    void startPath(const QPointF& point);
+    void endPath();
+
+    std::vector<Geo::Polylines> mirrorAndOffsetCurves(const QPointF& offset);
+    Geo::Polylines mirrorAndOffsetCurves(const QPointF& offset, Geo::Polylines paths_);
+
+    [[= Serial::skip]] std::vector<QSharedPointer<QColor>> debugColor;
+
+    enum {
+        AlwaysG,
+        AlwaysX,
+        AlwaysY,
+        AlwaysZ,
+        AlwaysI,
+        AlwaysJ,
+        AlwaysR,
+        AlwaysS,
+        AlwaysF,
+
+        SpaceG,
+        SpaceX,
+        SpaceY,
+        SpaceZ,
+        SpaceI,
+        SpaceJ,
+        SpaceR,
+        SpaceS,
+        SpaceF,
+
+        Size
+    };
+
+    // У линейных строк (G0/G1) и у дуг (G2/G3) свой диалект: пост задаёт два
+    // формата слов, formated() выбирает набор по слову G строки.
+    enum FormatKind {
+        Linear,
+        Arc,
+        KindCount
+    };
+
+    // Рабочее состояние генератора текста УП: пересобирается regenerate(),
+    // в проект не пишется.
+    [[= Serial::skip]] Geo::Polylines g0path_;
+    [[= Serial::skip]] double z_{};
+
+    static inline QString lastDir;
+    static inline bool redirected;
+    static inline constexpr auto CMD_LIST = u"GXYZIJRSF"_sv;
+    // Из них координатные -- те, что живут на сетке вывода (GCode::Units).
+    static inline constexpr auto COORD_LIST = u"XYZIJR"_sv;
+
+    std::vector<double> getDepths();
+
+    [[= Serial::skip]] bool formatFlags[KindCount][Size]{};
+    [[= Serial::skip]] Code gCode_ = GNull;
+    [[= Serial::skip]] QString jsError_; // последняя ошибка скрипта, для комментария в УП
+    static void parseFormat(const QString& format, bool (&flags)[Size]);
+
+    // Слово УП: буква и то, что за ней. Координатные несут с собой своё ЧИСЛО
+    // в единицах вывода -- повтор подавляется по нему, а не по тексту: текст
+    // это лишь запись числа, и решать по записи значит решать по округлению.
+    struct Word {
+        QString text;
+        Units units{};
+        bool numeric{};
+        Word(QString text)
+            : text{std::move(text)} { }
+        Word(QChar letter, Units units)
+            : text{letter + format(units)}
+            , units{units}
+            , numeric{true} { }
+        operator const QString&() const { return text; }
+    };
+
+    // Последнее НАПИСАННОЕ значение каждого слова: у координатных числом, у
+    // прочих (G, S, F -- там значение и есть текст) текстом.
+    [[= Serial::skip]] Units lastUnits[SpaceG]{};
+    [[= Serial::skip]] bool lastWritten[SpaceG]{};
+    [[= Serial::skip]] QString lastValues[SpaceG];
+
+    std::vector<QString> savePath(const Geo::Polyline& srcCurve, double perimeter = {}, double depth = {});
+
+    QString formated(const std::vector<Word>& data);
+    // Готовые слова из JS-скрипта. Координатные разбираются обратно в число
+    // и печатаются заново -- чтобы вывод скрипта шёл по той же сетке и с тем
+    // же подавлением повторов, что и вывод C++.
+    QString formatedText(const std::vector<QString>& data);
+
+    struct Coord {
+        QChar c;
+        Word operator()(double mm) const { return {c, toUnits(mm)}; }
+        operator Word() const { return {c, Units{}}; }
+    } static constexpr i{u'I'}, j{u'J'}, rad{u'R'}, x{u'X'}, y{u'Y'}, z{u'Z'};
+
+    // Обороты шпинделя длиной не являются -- своя запись, не по сетке вывода.
+    struct {
+        QChar c;
+        Word operator()(double val) const { return {c + formatValue(val)}; }
+    } static constexpr speed{u'S'};
+
+    QString g0();
+    QString g1();
+    QString g2();
+    QString g3();
+    void extracted(const Geo::Vertex& v);
+    QString g(const Geo::Vertex& v);
+
+    // QString i(double val) { return u'I' + format(val); }
+    // QString j(double val) { return u'J' + format(val); }
+    // QString x(double val) { return u'X' + format(val); }
+    // QString y(double val) { return u'Y' + format(val); }
+    // QString z(double val) { return u'Z' + format(val); }
+    // QString speed(int val) { return u'S' + QString::number(val); }
+
+    // Текст координаты -- ровно запись её числа: цифры до точки, значащие
+    // после и ни одного хвостового нуля.
+    static QString format(Units units);
+    static QString format(double mm) { return format(toUnits(mm)); }
+
+    // Число, длиной НЕ являющееся: подача (мм/мин), обороты. Сетка вывода
+    // задана допуском геометрии, и к минутам с оборотами он отношения не
+    // имеет -- у них своя запись, до трёх знаков без хвостовых нулей.
+    static QString formatValue(double val);
+
+    void initSave();
+    void writeHeader();
+    void addSourceInfo();
+    void addInfo();
+    void writeFooter();
+    bool runJsScript(const QString& scriptPath);
+    // Контекст для функций поста.
+    Post::Context postContext();
+    // Одна дуга в текущем диалекте (I/J, R или хордами).
+    void arcLines(std::vector<QString>& lines, const Geo::Vertex& fr, const Geo::Vertex& to, const Geo::Arc& arc);
+
+    // AbstractFile interfaces
+    // initFrom не переопределяется: базовая реализация переносит ровно то, что
+    // нужно при замене УП на месте (id, узел дерева, сторону, цвет, тип, трансформ),
+    // а programName_ и visibility_ переносить как раз НЕЛЬЗЯ -- у нового файла они
+    // уже свои, выставленные формой до замены.
+    // FileTree::Node* node() override;
+
+    /////////////////////////////////////////////////////////////
+
+    void createGiDrill();
+    void createGiLaser();
+    void createGiPocket();
+    void createGiProfile();
+    void createGiRaster();
+};
+
+} // namespace GCode

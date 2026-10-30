@@ -1,0 +1,164 @@
+/*******************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ ********************************************************************************/
+#pragma once
+
+#include "geo/geo_json.h"
+#include "geo/polygon.h"
+#include "serial.h"
+#include <any>
+
+// Только объявление: <QTransform> -- заголовок QtGui, и втянутый сюда, в
+// заголовок, который подключают все, он оказывается раньше ядра QtCore. На
+// gcc-16 такой порядок ломает разбор qmath.h. Тела, которым нужен полный тип,
+// уехали в plugintypes.cpp.
+class QTransform;
+
+// struct Circle {
+// QPointF center;
+// double radius;
+// };
+// struct Ellipse {
+// QPointF center;
+// QPointF focus;
+// };
+// struct ArcCircle {
+// QPointF center;
+// double radius;
+// double angle1;
+// double angle2;
+// };
+// struct ArcEllipse {
+// QPointF center;
+// QPointF focus;
+// double angle1;
+// double angle2;
+// };
+
+// struct Polygon {
+// QPolygonF points;
+// bool open{};
+// };
+
+// struct Rectangle {
+// QPointF p1;
+// QPointF p2;
+// double angle;
+// };
+
+struct Transform {
+    double angle{};
+    QPointF translate{};
+    QPointF scale{1, 1};
+
+    QTransform toQTransform() const;
+    operator QTransform() const;
+};
+
+enum class GCType {
+    Null,
+    Drill,
+    Pocket,
+    Profile,
+    Thermal,
+    THread
+};
+
+struct GraphicObject {
+
+    // clang-format off
+    enum Type:uint32_t {
+        Null,
+        Arc       , // 1
+        Circle    , // 2
+        Elipse    , // 3
+        Line      , // 4
+        PolyLine  , // 5
+        Polygon   , // 6
+        Rect      , // 7
+        Square    , // 8
+        Text      , // 9
+        Composite , // 10
+        Dummy2    , // 11
+        Dummy3    , // 12
+        Dummy4    , // 13
+        Dummy6    , // 14
+        Dummy7    , // 15
+        FlStamp   = 0b01'0000'0000, // штамп по xy
+        FlDrawn   = 0b10'0000'0000, // рисование по xy ... xNyN
+
+    };
+    // clang-format on
+
+    Geo::Polygons fill;
+    Geo::Polyline path;
+    QPointF pos{std::nanf(""), std::nanf("")};
+    QString name;
+    Type type{Null};
+    int32_t id{-1};
+    [[= Serial::skip]] std::any raw; // транзиент
+
+    inline bool isType(uint32_t t) const { return (t & 0xFF) ? (type & 0xFF) == (t & 0xFF) : true; }
+    inline bool isFlags(uint32_t f) const { return (f & ~0xFF) ? (type & ~0xFF) & f : true; }
+    inline bool test(uint32_t t) const { return isType(t) && isFlags(t); }
+    inline bool closed() const { return path.isClosed(); }
+    // Полярность несёт ориентация обхода, а она есть только у ЗАМКНУТОГО
+    // контура. У открытого пути (осевая трассы) ориентации нет вовсе --
+    // штрих читается телом, то есть тёмным; спрашивать у него signedArea
+    // нельзя (контракт pre(closed) валит программу).
+    bool positive() const { return !path.isClosed() || path.isPositive(); }
+};
+
+// Перенос графического объекта преобразованием: заливка пересобирается в
+// точном домене, контур правится на месте.
+GraphicObject operator*(GraphicObject go, const QTransform& t);
+
+struct Range {
+    double min{-std::numeric_limits<double>::max()};
+    double max{+std::numeric_limits<double>::max()};
+    bool operator()(double val) const { return min <= val && val <= max; }
+    inline bool isNull() const {
+        return min == -std::numeric_limits<double>::max()
+            && max == +std::numeric_limits<double>::max();
+    }
+};
+
+struct Criteria {
+    std::vector<GraphicObject::Type> types;
+    Range area{};
+    Range length{};
+    bool positiveOnly{}; /// NOTE
+    bool test(const GraphicObject& go) const {
+        bool fl{};
+        for(auto type: types)
+            if((fl = go.test(type)))
+                break;
+        if(fl && !length.isNull())
+            fl &= length(go.path.perimeter());
+        if(fl && !area.isNull())
+            fl &= area(go.fill.area());
+        return fl;
+    }
+};
+
+enum Side {
+    NullSide = -1,
+    Top,
+    Bottom
+};
+
+struct LayerType {
+    int32_t id = -1;
+    QString actName;
+    QString actToolTip;
+    QString shortActName() const { return actName; }
+};
+
+Q_DECLARE_METATYPE(LayerType)

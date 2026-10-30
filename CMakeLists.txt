@@ -1,0 +1,279 @@
+#[[
+ Author    :  Damir Bakiev
+ Version   :  na
+ Date      :  ХХ ХХХ 2026
+ Website   :  na
+ Copyright :  Damir Bakiev 2016-2026
+ License   :
+ Use, modification & distribution is subject to Boost Software License Ver 1.
+ http://www.boost.org/LICENSE_1_0.txt
+]]
+cmake_minimum_required(VERSION 4.0 FATAL_ERROR)
+
+# set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
+# set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_COMMAND} -E time")
+
+# Единственное место, где задаётся версия продукта: отсюда её берут
+# подпроект GGEasy, ресурсы Windows (versioninfo.rc) и version.h.
+project(GERBER_X3 VERSION 0.9.7.5)
+
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
+set(CMAKE_UNITY_BUILD ON)
+
+# Используем mold/lld, если они есть в системе и реально поддерживаются текущим
+# тулчейном (просто наличия бинарника недостаточно: например, mold из
+# Homebrew/MSYS2 может присутствовать, но не поддерживаться CMAKE_LINKER_TYPE на
+# конкретной платформе/компиляторе).
+include(CheckLinkerFlag)
+find_program(MOLD_EXECUTABLE mold)
+if(MOLD_EXECUTABLE)
+  check_linker_flag(CXX "-fuse-ld=mold" CXX_LINKER_SUPPORTS_MOLD)
+endif()
+if(CXX_LINKER_SUPPORTS_MOLD)
+  set(CMAKE_LINKER_TYPE MOLD)
+else()
+  find_program(LLD_EXECUTABLE NAMES ld.lld lld)
+  if(LLD_EXECUTABLE)
+    check_linker_flag(CXX "-fuse-ld=lld" CXX_LINKER_SUPPORTS_LLD)
+  endif()
+  if(CXX_LINKER_SUPPORTS_LLD)
+    set(CMAKE_LINKER_TYPE LLD)
+  endif()
+endif()
+
+# Проект собирают компилятором посвежее системного, и его libstdc++ требует
+# версий символов (GLIBCXX_3.4.35 и далее), которых в /lib64/libstdc++.so.6
+# ещё нет: слинкованное не запускается вовсе.
+#
+# Лечится это RPATH на каталог libstdc++ САМОГО компилятора, а не статической
+# линковкой. -static-libstdc++ здесь не годится: Qt6 собран системным
+# компилятором и свою libstdc++.so.6 тянет всё равно, так что в процессе
+# оказываются ДВЕ копии рантайма. Они перебивают символы друг друга, и первым
+# же падает инициализатор потоков ввода-вывода -- ios_base_library_init()
+# уходит по нулевому адресу ещё до main().
+#
+# RPATH оставляет в процессе одну копию, и притом новую: она содержит и все
+# старые версии символов, которые нужны Qt.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  execute_process(
+    COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libstdc++.so
+    OUTPUT_VARIABLE CXX_RUNTIME_LIB
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(CXX_RUNTIME_LIB AND IS_ABSOLUTE "${CXX_RUNTIME_LIB}")
+    cmake_path(SET CXX_RUNTIME_LIB NORMALIZE "${CXX_RUNTIME_LIB}")
+    cmake_path(GET CXX_RUNTIME_LIB PARENT_PATH CXX_RUNTIME_DIR)
+    # Системный каталог прописывать незачем -- он и так в путях загрузчика.
+    if(NOT CXX_RUNTIME_DIR MATCHES "^/(usr/)?lib(64)?$")
+      message(
+        STATUS "libstdc++ компилятора не системная, RPATH: ${CXX_RUNTIME_DIR}")
+      list(APPEND CMAKE_BUILD_RPATH "${CXX_RUNTIME_DIR}")
+      list(APPEND CMAKE_INSTALL_RPATH "${CXX_RUNTIME_DIR}")
+    endif()
+  endif()
+endif()
+
+# libggcore.so лежит рядом с GGEasy, а плагины — в подкаталоге plugins/:
+# $ORIGIN покрывает поиск ядра из exe, $ORIGIN/.. — из плагинов.
+if(CMAKE_SYSTEM_NAME STREQUAL Linux)
+  list(APPEND CMAKE_BUILD_RPATH "$ORIGIN" "$ORIGIN/..")
+  list(APPEND CMAKE_INSTALL_RPATH "$ORIGIN" "$ORIGIN/..")
+endif()
+
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+
+# ##############################################################################
+include(FetchContent)
+set(FETCHCONTENT_BASE_DIR ${CMAKE_CURRENT_LIST_DIR}/third_party)
+
+# Сериализация проекта (.g2g) — JSON через статическую рефлексию C++26.
+# Именно CACHE: у simdjson cmake_minimum_required 3.14 (CMP0126 OLD), его
+# собственный set(... CACHE STRING) снёс бы обычную переменную и оставил AUTO,
+# а AUTO-детект гоняет try_compile без нашего directory-флага -freflection.
+set(SIMDJSON_STATIC_REFLECTION_MODE
+    ON
+    CACHE STRING "" FORCE)
+set(SIMDJSON_DEVELOPER_MODE OFF)
+
+fetchcontent_declare(
+  ctre
+  GIT_REPOSITORY
+    "https://github.com/hanickadot/compile-time-regular-expressions.git"
+  GIT_TAG main
+  GIT_SHALLOW ON)
+# Пин на master: поддержка рефлексии GCC 16 (-freflection) появилась после
+# v4.6.6, как и опция SIMDJSON_STATIC_REFLECTION_MODE.
+fetchcontent_declare(
+  simdjson
+  GIT_REPOSITORY "https://github.com/simdjson/simdjson.git"
+  GIT_TAG v4.6.6
+  GIT_SHALLOW ON)
+# Сторонние цели собираются БЕЗ LTO под mingw. Наш код идёт с -Wa,-mbig-obj
+# (у COFF предел в 65535 секций, см. ниже), и объектные файлы получают иную
+# разновидность контейнера COFF. Сторонние цели наших флагов не наследуют --
+# они объявлены до add_compile_options ниже, -- поэтому при LTO их объекты
+# приезжают в общий мердж в другом формате, и lto1 падает с "COFF object
+# format mismatch". Без LTO их объекты несут готовый код, lto1 в них не
+# заглядывает, а линкер спокойно сливает оба формата.
+if(MINGW)
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF)
+
+  # Встроенная раскладка WHOLE_ARCHIVE у CMake для GNU-фронтенда --
+  # --push-state/--pop-state, а lld в MinGW-режиме (COFF) этих опций не
+  # знает и валит линковку libggcore. Простая пара
+  # --whole-archive/--no-whole-archive делает то же самое и понятна обоим
+  # линкерам -- и bfd, и lld. Переменная именно ЯЗЫКОВАЯ: у CMake фича
+  # задана per-language, и generic-вариант ею перекрывается.
+  set(CMAKE_CXX_LINK_LIBRARY_USING_WHOLE_ARCHIVE
+      "LINKER:--whole-archive" "<LINK_ITEM>" "LINKER:--no-whole-archive")
+  set(CMAKE_CXX_LINK_LIBRARY_USING_WHOLE_ARCHIVE_SUPPORTED TRUE)
+endif()
+
+fetchcontent_makeavailable(ctre simdjson)
+
+# LTO под MinGW выключен НАСОВСЕМ (раньше здесь возвращалось ON после
+# FetchContent). С появлением shared-ядра libggcore линковка DLL идёт через
+# --whole-archive по девяти статлибам, и mingw-ld падает в auto-export на
+# дублирующихся weak-шаблонных символах: "cannot export ...: symbol wrong
+# type (4 vs 3)". Проверено тремя прогонами CI: гасить IPO у самой цели
+# ggcore бесполезно (GCC подключает LTO-плагин, увидев LTO-объекты во
+# входных архивах, независимо от настроек потребителя), а
+# WINDOWS_EXPORT_ALL_SYMBOLS не покрывает символы из линкуемых архивов
+# (nm гоняется только по собственным объектникам цели, у ggcore это одна
+# пустышка). Единственный рабочий вариант -- собирать статлибы без LTO,
+# т.е. выключить его на весь MinGW-конфиг.
+
+# Статический libsimdjson.a влинковывается в плагины (.so) — без PIC не
+# слинкуется.
+set_target_properties(simdjson PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# ##############################################################################
+
+option(GERBER_NATIVE_MARCH
+       "Optimize for host CPU architecture (disables portability)" ON)
+
+if(CMAKE_BUILD_TYPE STREQUAL Debug)
+  add_compile_definitions(DEBUG=1)
+endif()
+
+# SET(CMAKE_FIND_PACKAGE_SORT_ORDER NATURAL)
+# SET(CMAKE_FIND_PACKAGE_SORT_DIRECTION DEC)
+
+add_compile_definitions(
+  QT_MESSAGELOGCONTEXT
+  QT_NO_CAST_TO_ASCII
+  QT_NO_CAST_FROM_ASCII
+  QT_NO_URL_CAST_FROM_STRING
+  QT_NO_CAST_FROM_BYTEARRAY
+  QT_USE_QSTRINGBUILDER
+  QT_USE_FAST_OPERATOR_PLUS
+  QT_DISABLE_DEPRECATED_BEFORE=0x070000
+  saturate_cast=saturating_cast)
+
+# Compile options for our own code only — заданы после FetchContent, чтобы
+# сторонние цели (ctre, simdjson) их не наследовали.
+set(COMMON_COMPILE_OPTIONS
+    -fPIC
+    -Wall
+    -Wextra
+    -Wimplicit-fallthrough
+    -Wpedantic
+    # -Og instead of the default -O0 in Debug: _FORTIFY_SOURCE (pulled in by
+    # -fhardened) requires optimizations, otherwise GCC emits -Whardened.
+    $<$<CONFIG:Debug>:-Og>)
+
+if(GERBER_NATIVE_MARCH)
+  list(APPEND COMMON_COMPILE_OPTIONS -march=native)
+endif()
+
+# -fhardened, -fstack-clash-protection и RELRO/BIND_NOW завязаны на специфику
+# glibc/ELF и не поддерживаются mingw-w64 GCC (Windows) и Homebrew GCC (macOS),
+# поэтому включаем их только под Linux.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  add_compile_options(
+    ${COMMON_COMPILE_OPTIONS}
+    # -fcf-protection=full -fvtable-verify=preinit
+    -freflection -fstack-protector-strong)
+  if(CMAKE_SYSTEM_NAME STREQUAL Linux)
+    add_compile_options(-fhardened -fstack-clash-protection)
+    add_link_options(-Wl,-z,relro -Wl,-z,now)
+  endif()
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  add_compile_options(
+    ${COMMON_COMPILE_OPTIONS}
+    # -fcf-protection=full -fvtable-verify=preinit
+    -freflection -fstack-protector-strong)
+  if(CMAKE_SYSTEM_NAME STREQUAL Linux)
+    add_compile_options(-fhardened -fstack-clash-protection)
+    add_link_options(-Wl,-z,relro -Wl,-z,now)
+  endif()
+  # У COFF предел в 65535 секций на объектный файл, и unity-сборка вместе с
+  # шаблонами CGAL/Qt к нему вплотную подходит: ассемблер падает с "too many
+  # sections". У ELF такого предела нет, флага там тоже нет -- потому только
+  # для mingw.
+  if(MINGW)
+    add_compile_options(-Wa,-mbig-obj)
+  endif()
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
+  # Classic icc/icpc: no C++26 reflection support, but the driver is
+  # GCC-compatible enough to accept the same hardening flags.
+  add_compile_options(${COMMON_COMPILE_OPTIONS} -fstack-protector-strong)
+  if(CMAKE_SYSTEM_NAME STREQUAL Linux)
+    add_link_options(-Wl,-z,relro -Wl,-z,now)
+  endif()
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  # No C++26 reflection support yet. /GS (stack protector) is already on by
+  # default; approximate the rest of -fhardened with CFG + SDL checks.
+  add_compile_options(/sdl /guard:cf)
+  add_link_options(/DYNAMICBASE /NXCOMPAT /GUARD:CF)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL Linux AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  # Release: полный strip на линковке — symtab+strtab занимали ~28% каждого
+  # .so; плюс отсев несослатых секций.
+  add_compile_options("$<$<CONFIG:Release>:-ffunction-sections>"
+                      "$<$<CONFIG:Release>:-fdata-sections>")
+  add_link_options("$<$<CONFIG:Release>:LINKER:--strip-all>"
+                   "$<$<CONFIG:Release>:LINKER:--gc-sections>")
+  # Debug/RelWithDebInfo: DWARF уезжает в .dwo рядом с объектниками, сами
+  # .so/exe не тащат отладку в себе (плагин был ~90-110 МБ). Отладка локальная:
+  # gdb находит .dwo по путям build-каталога; переносить бинарь с отладкой на
+  # другую машину так нельзя — но Debug-сборки здесь и не переносятся.
+  add_compile_options("$<$<CONFIG:Debug,RelWithDebInfo>:-gsplit-dwarf>")
+  add_link_options("$<$<CONFIG:Debug,RelWithDebInfo>:LINKER:--gdb-index>")
+endif()
+
+# FIND BOOST — version check is handled by find_package directly
+find_package(Boost 1.85 REQUIRED)
+message(STATUS "==> Boost ${Boost_VERSION} found")
+
+find_package(
+  Qt6
+  COMPONENTS Widgets LinguistTools Qml
+  REQUIRED)
+
+include(${CMAKE_SOURCE_DIR}/PATHS.cmake)
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
+include_directories(ggeasy)
+
+# STATIC LIBS
+add_subdirectory(static_libs)
+
+# PLUGINS
+add_subdirectory(plugins)
+
+# SHARED CORE: ядро одной библиотекой для GGEasy и плагинов
+add_subdirectory(ggcore)
+
+# MAIN APP
+add_subdirectory(ggeasy)
+
+# add_subdirectory(ToolTest)

@@ -1,0 +1,49 @@
+CompileFlags:
+  Compiler: /opt/clang-p2996/bin/clang++
+  Remove:
+    # GCC-специфичные флаги, которые clang не знает
+    - -fcontracts*              # -fcontracts, -fcontract-evaluation-semantic=... и т.п.
+    - -fmodules                 # у clang -fmodules означает совсем другое (Clang header modules)
+    - -fmodule-mapper*
+    - -fmodule-only
+    - -fdeps-*                  # p1689-сканирование от CMake/GCC
+    - -fconcepts-diagnostics-depth*
+    - -fhardened                # GCC 16; у clang такого нет -- ошибка в каждом файле
+    - -flto*
+    - -mcpu=*                   # если тянутся embedded-флаги, чужие для clang
+  Add:
+    - -std=c++26
+    # Рефлексия: -freflection у GCC и p2996 совпадает по написанию,
+    # но добавляем расширенный набор форка
+    - -freflection-latest
+    - -fexpansion-statements
+    # Контракты: p2996 их не знает — гасим синтаксис для LSP.
+    # Реальную семантику проверяет только g++-16.
+    - "-Dpre(...)="
+    - "-Dpost(...)="
+    - "-Dcontract_assert(...)=[](bool){}(__VA_ARGS__)"
+    - -isystem/opt/gcc-16/include/c++/16.2.1
+    - -isystem/opt/gcc-16/include/c++/16.2.1/x86_64-pc-linux-gnu
+    - -isystem/opt/gcc-16/include/c++/16.2.1/backward
+  # BuiltinHeaders: QueryDriver   # clangd >= 21: брать системные заголовки из query-driver
+
+Diagnostics:
+  UnusedIncludes: None          # <contracts> будет казаться «неиспользуемым» из-за макросов
+  Suppress:
+    # <meta> из GCC 16: std::meta::exception::what() -- consteval поверх
+    # обычного виртуального std::exception::what() (bits/exception.h). Это
+    # законный C++26 (P2996), но clang его ещё не умеет и роняет ошибку в
+    # каждом файле, включающем serial.h. Семантику проверяет g++-16.
+    - consteval_override
+    # Метафункции std::meta в libstdc++ (access_context::current, add_pointer,
+    # nonstatic_data_members_of, data_member_spec, define_aggregate...)
+    # объявлены БЕЗ ТЕЛА -- их вычисляет сам фронтенд g++. clang-p2996 делает
+    # рефлексию своей библиотекой и этих тел не видит, поэтому в
+    # consteval-контексте они для него "undefined function", а дальше идёт
+    # каскад: consteval-блок не константа -> AppBase остаётся неполным ->
+    # `class App : AppBase` -> все Accessor<appMember<"...">()>. Настоящую
+    # проверку делает только g++-16.
+    - constexpr_var_requires_const_init   # reflection.h: constexpr CTX = access_context::current()
+    - consteval_block_not_constexpr       # app.h: consteval { define_aggregate(^^AppBase, ...) }
+    - incomplete_base_class               # app.h: class App : AppBase
+    - expr_not_cce                        # app.h: NTTP appMember<"...">() в аксессорах App

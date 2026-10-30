@@ -1,0 +1,137 @@
+// This is an open source non-commercial project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++, C#, and Java: https://pvs-studio.com
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License:                                                                     *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ *******************************************************************************/
+
+#include "dxf_settingstab.h"
+
+#include <QtWidgets>
+
+namespace Dxf {
+
+SettingsTab::SettingsTab(QWidget* parent)
+    : AbstractFileSettings{parent} {
+    setObjectName(u"tabDxf"_s);
+    auto verticalLayout = new QVBoxLayout{this};
+    verticalLayout->setObjectName(u"verticalLayout"_s);
+    verticalLayout->setContentsMargins(6, 6, 6, 6);
+
+    auto groupBox = new QGroupBox{this};
+    groupBox->setObjectName(u"groupBox"_s);
+
+    auto formLayout = new QFormLayout{groupBox};
+    formLayout->setObjectName(u"formLayout"_s);
+    formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+    formLayout->setContentsMargins(6, 6, 6, 6);
+    // DefaultFont
+    auto labelDefaultFont = new QLabel{groupBox};
+    labelDefaultFont->setObjectName(u"labelDefaultFont"_s);
+    formLayout->setWidget(0, QFormLayout::LabelRole, labelDefaultFont);
+
+    fcbxDxfDefaultFont = new QFontComboBox{groupBox};
+    fcbxDxfDefaultFont->setObjectName(u"fcbxDxfDefaultFont"_s);
+    formLayout->setWidget(0, QFormLayout::FieldRole, fcbxDxfDefaultFont);
+    // Bold Font
+    auto labelBoldFont = new QLabel{groupBox};
+    labelBoldFont->setObjectName(u"labelBoldFont"_s);
+    formLayout->setWidget(1, QFormLayout::LabelRole, labelBoldFont);
+
+    chbxBoldFont = new QCheckBox{u" "_s, groupBox};
+    chbxBoldFont->setObjectName(u"chbxBoldFont"_s);
+    formLayout->setWidget(1, QFormLayout::FieldRole, chbxBoldFont);
+    // Italic Font
+    auto labelItalicFont = new QLabel{groupBox};
+    labelItalicFont->setObjectName(u"labelItalicFont"_s);
+    formLayout->setWidget(2, QFormLayout::LabelRole, labelItalicFont);
+
+    chbxItalicFont = new QCheckBox{u" "_s, groupBox};
+    chbxItalicFont->setObjectName(u"chbxItalicFont"_s);
+    formLayout->setWidget(2, QFormLayout::FieldRole, chbxItalicFont);
+    // Override Fonts
+    auto labelOverrideFonts = new QLabel{groupBox};
+    labelOverrideFonts->setObjectName(u"labelOverrideFonts"_s);
+    formLayout->setWidget(3, QFormLayout::LabelRole, labelOverrideFonts);
+
+    chbxOverrideFonts = new QCheckBox{u" "_s, groupBox};
+    chbxOverrideFonts->setObjectName(u"chbxOverrideFonts"_s);
+    formLayout->setWidget(3, QFormLayout::FieldRole, chbxOverrideFonts);
+
+    verticalLayout->addWidget(groupBox);
+
+    // 3D-проекции: какие стороны 3D-модели превращать в слои.
+    auto groupBoxViews = new QGroupBox{this};
+    groupBoxViews->setObjectName(u"groupBoxViews"_s);
+    groupBoxViews->setTitle(QApplication::translate("SettingsDialog", "3D projections", nullptr));
+    groupBoxViews->setToolTip(QApplication::translate("SettingsDialog",
+        "For files with 3D geometry (polyface/polygon mesh, 3DFACE) a layer is created\n"
+        "per checked side, containing the silhouette of the model seen from that side.",
+        nullptr));
+
+    auto viewsLayout = new QFormLayout{groupBoxViews};
+    viewsLayout->setObjectName(u"viewsLayout"_s);
+    viewsLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignTrailing | Qt::AlignVCenter);
+    viewsLayout->setContentsMargins(6, 6, 6, 6);
+
+    static constexpr const char* viewLabel[]{"Top:", "Bottom:", "Front:", "Back:", "Right:", "Left:"};
+    for(int i{}; i < int(View::Count); ++i) {
+        auto label = new QLabel{QApplication::translate("SettingsDialog", viewLabel[i], nullptr), groupBoxViews};
+        viewsLayout->setWidget(i, QFormLayout::LabelRole, label);
+        chbxView[i] = new QCheckBox{groupBoxViews};
+        chbxView[i]->setObjectName(u"chbxView%1"_s.arg(i));
+        viewsLayout->setWidget(i, QFormLayout::FieldRole, chbxView[i]);
+    }
+
+    verticalLayout->addWidget(groupBoxViews);
+
+    auto verticalSpacer = new QSpacerItem{20, 40, QSizePolicy::Minimum, QSizePolicy::Expanding};
+    verticalLayout->addItem(verticalSpacer);
+
+    chbxBoldFont->setText(QString());
+    chbxItalicFont->setText(QString());
+    chbxOverrideFonts->setText(QString());
+
+    groupBox->setTitle(QApplication::translate("SettingsDialog", "Font", nullptr));
+
+    labelBoldFont->setText(QApplication::translate("SettingsDialog", "Bold:", nullptr));
+    labelDefaultFont->setText(QApplication::translate("SettingsDialog", "Default Font:", nullptr));
+    labelItalicFont->setText(QApplication::translate("SettingsDialog", "Italic:", nullptr));
+    labelOverrideFonts->setText(QApplication::translate("SettingsDialog", "Override declared fonts in DXF:", nullptr));
+}
+
+SettingsTab::~SettingsTab() { }
+
+void SettingsTab::readSettings(MySettings& settings) {
+    settings.beginGroup(u"Dxf"_s);
+    defaultFont_ = settings.getValue(fcbxDxfDefaultFont, u"Arial"_s);
+    boldFont_ = settings.getValue(chbxBoldFont, false);
+    italicFont_ = settings.getValue(chbxItalicFont, false);
+    overrideFonts_ = settings.getValue(chbxOverrideFonts, false);
+    views_ = {};
+    for(int i{}; i < int(View::Count); ++i)
+        if(settings.getValue(chbxView[i], bool(AllViews & viewBit(View(i)))))
+            views_ |= viewBit(View(i));
+    settings.endGroup();
+}
+
+void SettingsTab::writeSettings(MySettings& settings) {
+    settings.beginGroup(u"Dxf"_s);
+    defaultFont_ = settings.setValue(fcbxDxfDefaultFont);
+    boldFont_ = settings.setValue(chbxBoldFont);
+    italicFont_ = settings.setValue(chbxItalicFont);
+    overrideFonts_ = settings.setValue(chbxOverrideFonts);
+    views_ = {};
+    for(int i{}; i < int(View::Count); ++i)
+        if(settings.setValue(chbxView[i]))
+            views_ |= viewBit(View(i));
+    settings.endGroup();
+}
+
+} // namespace Dxf

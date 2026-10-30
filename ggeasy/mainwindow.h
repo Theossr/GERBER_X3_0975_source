@@ -1,0 +1,417 @@
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ ********************************************************************************/
+#pragma once
+// #include "a_pch.h"
+
+#include "app.h"
+#include "recent.h"
+#include "settingsdialog.h"
+
+#include <QAction>
+#include <QActionGroup>
+#include <QDockWidget>
+#include <QMainWindow>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QThread>
+#include <QUndoStack>
+
+namespace FileTree {
+class View;
+}
+
+namespace GCode {
+class File;
+}
+
+class MainWindow : public QMainWindow {
+    Q_OBJECT
+    // friend void FileTree::View::on_doubleClicked(const QModelIndex&);
+    friend class Recent;
+    friend class Project;
+    friend int main(int, char*[]);
+
+public:
+    explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
+
+    void init();
+
+    // QMainWindow interface
+    QMenu* createPopupMenu() override;
+    const QDockWidget* dockWidget() const;
+    QDockWidget* dockWidget();
+
+    static void translate(const QString& locale) {
+        static std::vector<std::unique_ptr<QTranslator>> translators;
+        translators.clear();
+        QDir dir(qApp->applicationDirPath() + u"/translations"_s);
+        for(auto&& str: dir.entryList(QStringList{u"*"_s + locale + u".qm"_s}, QDir::Files)) {
+            translators.emplace_back(std::make_unique<QTranslator>());
+            if(translators.back()->load(str, dir.path()))
+                qApp->installTranslator(translators.back().get());
+        }
+    }
+    static void extracted(QtMsgType& type);
+    void loggingHandler(QtMsgType type, const QStringList& context, const QString& message);
+    void loadFile(const QString& fileName);
+    static void updateTheme() {
+
+        static auto palette = qApp->style()->standardPalette();
+        static auto style = qApp->style()->name();
+
+        if(App::settings().theme()) {
+
+            static const char* const dwCloseXpm[]{
+                "11 13 3 1",
+                "  c None",
+                "@ c #6C6A67",
+                "$ c #6C6A67", // B5B0AC
+                "           ",
+                "           ",
+                "           ",
+                "  $@   @$  ",
+                "  @@@ @@@  ",
+                "   @@@@@   ",
+                "    @@@    ",
+                "   @@@@@   ",
+                "  @@@ @@@  ",
+                "  $@   @$  ",
+                "           ",
+                "           ",
+                "           ",
+            };
+
+            static const char* const dwRestoreXpm[]{
+                "11 13 3 1",
+                "  c None",
+                "@ c #6C6A67",
+                "# c #6C6A67", // ABA6A3
+                "           ",
+                "           ",
+                "           ",
+                "    #@@@#  ",
+                "    @   @  ",
+                "  #@@@# @  ",
+                "  @   @ @  ",
+                "  @   @@@  ",
+                "  @   @    ",
+                "  #@@@#    ",
+                "           ",
+                "           ",
+                "           ",
+            };
+
+            static const char* const dwMinimizeXpm[]{
+                "11 13 2 1",
+                "  c None",
+                "@ c #6C6A67",
+                "           ",
+                "           ",
+                "           ",
+                "           ",
+                "           ",
+                "           ",
+                "  @@@@@@@  ",
+                "  @@@@@@@  ",
+                "           ",
+                "           ",
+                "           ",
+                "           ",
+                "           ",
+            };
+
+            static const char* const qtTitlebarContextHelp [[maybe_unused]][]{
+                "10 10 3 1",
+                "  c None",
+                "# c #000000",
+                "+ c #444444",
+                "  +####+  ",
+                " ###  ### ",
+                " ##    ## ",
+                "     +##+ ",
+                "    +##   ",
+                "    ##    ",
+                "    ##    ",
+                "          ",
+                "    ##    ",
+                "    ##    ",
+            };
+
+            class Style : public QProxyStyle {
+            public:
+                Style()
+                    : QProxyStyle{u"Fusion"_s} { }
+
+                QPixmap getPixmap(StandardPixmap standardPixmap) const {
+                    switch(standardPixmap) {
+                    case SP_TitleBarNormalButton : return QPixmap{dwRestoreXpm};
+                    case SP_TitleBarMinButton    : return QPixmap{dwMinimizeXpm};
+                    case SP_TitleBarCloseButton  :
+                    case SP_DockWidgetCloseButton: return QPixmap{dwCloseXpm};
+                    default                      : return {};
+                    }
+                }
+
+                QIcon standardIcon(StandardPixmap standardIcon, const QStyleOption* option, const QWidget* widget) const override {
+                    if(auto pix = getPixmap(standardIcon); !pix.isNull()) return pix;
+                    return QProxyStyle::standardIcon(standardIcon, option, widget);
+                }
+
+                // QPixmap standardPixmap(StandardPixmap standardPixmap, const QStyleOption* opt, const QWidget* widget) const override {
+                // if(auto pix = getPixmap(standardPixmap); !pix.isNull()) return pix;
+                // return QProxyStyle::standardPixmap(standardPixmap, opt, widget);
+                // }
+
+                void drawPrimitive(PrimitiveElement element, const QStyleOption* option, QPainter* painter, const QWidget* widget = nullptr) const override {
+                    if(element == QStyle::PE_IndicatorBranch) {
+                        auto r = option->rect;
+                        auto c = r.center();
+                        auto color = qApp->palette().color(QPalette::Highlight);
+                        painter->setPen(color);
+                        if(!(option->state & State_Children)) {
+                            if(option->state & State_Sibling) // The node in the tree has a sibling (i.e., there is another node in the same column).
+                                painter->drawLine(c.x(), r.top(), c.x(), r.bottom());
+                            if(option->state & State_Item) { // This branch indicator has an item.
+                                painter->drawLine(c.x(), r.top(), c.x(), c.y());
+                                painter->drawLine(c.x(), c.y(), r.right(), c.y());
+                            }
+                        }
+                        // if(option->state & State_Children) // The branch has children (i.e., a new sub-tree can be opened at the branch).
+                        // painter->fillRect(option->rect, Qt::blue);
+                        // if(option->state & State_Open) // The branch indicator has an opened sub-tree.
+                        // painter->fillRect(option->rect, Qt::yellow);
+                    }
+                    QProxyStyle::drawPrimitive(element, option, painter, widget);
+                }
+            };
+
+            struct Color {
+                QColor base;
+                QColor disabled;
+                QColor highlight;
+                QColor link;
+                QColor window;
+                QColor windowText;
+            } const color = []() noexcept -> Color {
+            switch(App::settings().theme()) {
+            case LightTheme: return {
+                    .base       {230, 230, 230},
+                    .disabled   {127, 127, 127},
+                    .highlight  {App::settings().accentColor()},
+                    .link       {App::settings().accentColor()},
+                    .window     {200, 200, 200},
+                    .windowText {  0,   0,   0}};
+            case DarkTheme: default: return {
+                    .base       { 20,  20,  20},
+                    .disabled   { 80,  80,  80},
+                    .highlight  {App::settings().accentColor()},
+                    .link       {App::settings().accentColor()},
+                    .window     { 30,  30,  30},
+                    .windowText {220, 220, 220}};
+            } }();
+
+            QPalette palette;
+
+            palette.setBrush(QPalette::Text, color.windowText);
+            palette.setBrush(QPalette::ToolTipText, color.windowText);
+            palette.setBrush(QPalette::WindowText, color.windowText);
+            palette.setBrush(QPalette::ButtonText, color.windowText);
+            palette.setBrush(QPalette::HighlightedText, Qt::black);
+            palette.setBrush(QPalette::BrightText, Qt::red);
+
+            palette.setBrush(QPalette::Link, color.link);
+            palette.setBrush(QPalette::LinkVisited, color.highlight);
+
+            palette.setBrush(QPalette::AlternateBase, color.window);
+            palette.setBrush(QPalette::Base, color.base);
+            palette.setBrush(QPalette::Button, color.window);
+
+            palette.setBrush(QPalette::Highlight, color.highlight);
+
+            palette.setBrush(QPalette::ToolTipBase, color.window);
+            palette.setBrush(QPalette::Window, color.window);
+
+            palette.setBrush(QPalette::Disabled, QPalette::ButtonText, color.disabled);
+            palette.setBrush(QPalette::Disabled, QPalette::HighlightedText, color.disabled);
+            palette.setBrush(QPalette::Disabled, QPalette::Text, color.disabled);
+            palette.setBrush(QPalette::Disabled, QPalette::Shadow, color.disabled);
+
+            // palette.setBrush(QPalette::Inactive, QPalette::ButtonText,color. disabled);
+            // palette.setBrush(QPalette::Inactive, QPalette::HighlightedText,color. disabled);
+            // palette.setBrush(QPalette::Inactive, QPalette::Text,color. disabled);
+            // palette.setBrush(QPalette::Inactive, QPalette::Shadow,color. disabled);
+
+            qApp->setPalette(palette);
+            qApp->setStyle(new Style);
+        } else {
+            qApp->setStyle(QStyleFactory::create(style));
+            // qApp->setStyle(QStyleFactory::create(u"Fusion"_s));
+            // qApp->setPalette(palette); // QApplication::style()->standardPalette());
+        }
+
+        QIcon::setThemeName(
+            App::settings().theme() == DarkTheme
+                    || palette.text().color().red() > 128
+                ? u"ggeasy-light"_s
+                : u"ggeasy-dark"_s);
+    }
+
+    QUndoStack& undoStack() { return undoStack_; }
+
+    void setDockWidget(QWidget* dwContent) {
+        if(dwContent == nullptr || dockWidget_->widget() == dwContent)
+            return;
+        if(auto widget = dockWidget_->widget(); widget) {
+            dockWidget_->setWidget(dwContent); // NOTE  заменяет виджет новым и сбрасывается предок
+            widget->setParent(nullptr);        // так как виджет лежит полем класса плагина.
+        } else
+            dockWidget_->setWidget(dwContent);
+        dockWidget_->setWindowTitle(dwContent->windowTitle());
+        if(auto pbClose{dwContent->findChild<QPushButton*>(u"pbClose"_s)}; pbClose)
+            connect(pbClose, &QPushButton::clicked, this, &MainWindow::resetToolPathsActions);
+        dockWidget_->show();
+    }
+
+    void logMessage2(QtMsgType type, const QMessageLogContext& context, const QString& message);
+signals:
+    void parseFile(const QString& filename, int type);
+    void logMessage(QtMsgType type, const QStringList& context, const QString& message);
+
+private slots:
+    void fileError(const QString& fileName, const QString& error);
+    void fileProgress(const QString& fileName, int max, int value);
+    void fileCanceled(const QString& fileName);
+    void addFileToPro(class AbstractFile* file);
+    // void setDockWidget(QWidget* dwContent);
+
+private:
+    QDockWidget* dockWidget_ = nullptr;
+    Recent recentFiles;
+    Recent recentProjects;
+
+    QAction* closeAllAct_ = nullptr;
+    QAction* redoAct = nullptr;
+    QAction* undoAct = nullptr;
+
+    QMenu* fileMenu = nullptr;
+    QMenu* helpMenu = nullptr;
+    QMenu* serviceMenu = nullptr;
+
+    QString lastPath;
+    QThread parserThread;
+
+    QToolBar* fileToolBar = nullptr;
+    QToolBar* toolpathToolBar = nullptr;
+    QToolBar* zoomToolBar = nullptr;
+    QUndoStack undoStack_;
+
+    class Project* project_;
+    bool openFlag;
+
+    std::map<uint32_t, QAction*> toolpathActions;
+    QActionGroup actionGroup;
+
+    // Одно окно на все загрузки: строка на файл, своя отмена у каждой,
+    // общая внизу. Создаётся при первом файле и дальше только прячется.
+    class LoadProgressDialog* loadProgress_ = nullptr;
+    // Какой плагин разбирает какой файл -- ему и адресуется отмена.
+    QMap<QString, class AbstractFilePlugin*> loadingBy_;
+    LoadProgressDialog* loadProgress();
+    void cancelLoading(const QString& fileName);
+
+    QMessageBox reloadQuestion;
+
+    void open();
+    bool save();
+    bool saveAs();
+
+    void about();
+    bool closeProject();
+
+    void initWidgets();
+
+    void printDialog();
+    void renderPdf();
+
+    void loadSettings();
+    void saveSettings();
+
+    void resetToolPathsActions() {
+        if(auto widget = dockWidget_->widget(); widget) {
+            dockWidget_->setWidget(new QWidget); // NOTE  заменяет виджет новым и сбрасывается предок
+            widget->setParent(nullptr);          // так как виджет лежит полем класса плагина.
+        }
+        dockWidget_->setVisible(false);
+        if(auto action{actionGroup.checkedAction()}; action)
+            action->setChecked(false);
+    }
+
+    void selectAll();
+    void deSelectAll();
+
+    // create actions
+    void createActions();
+    void createActionsFile();
+    void createActionsEdit();
+    void createActionsService();
+    void createActionsHelp();
+    void createActionsZoom();
+    void createActionsToolPath();
+    void createActionsShape();
+
+    void customContextMenuForToolBar(const QPoint& pos);
+
+    // save GCode
+    void saveGCodeFile(int32_t id);
+    void saveGCodeFiles();
+    void saveSelectedGCodeFiles();
+
+    QString strippedName(const QString& fullFileName);
+
+    void newFile();
+    void documentWasModified();
+    bool maybeSave();
+
+    // Открыть УП на правку: показать форму её плагина, заполненную параметрами,
+    // с которыми УП была создана.
+    void editGcFile(int32_t id);
+
+private:
+    bool saveFile(const QString& fileName);
+    void setCurrentFile(const QString& fileName);
+    bool cli(std::span<std::string_view> commands = {});
+
+    // QWidget interface
+protected:
+    void closeEvent(QCloseEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void changeEvent(QEvent* event) override;
+
+    // QObject interface
+public:
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    struct Ui {
+        class GraphicsView* grView;
+        class QMenuBar* menubar;
+        class QStatusBar* statusbar;
+        class QDockWidget* treeDockWidget;
+
+        class QDockWidget* loggingDockWidget;
+        class QTextBrowser* loggingTextBrowser{};
+
+        FileTree::View* treeView;
+        void setupUi(QMainWindow* MainWindow);       // setupUi
+        void retranslateUi(QMainWindow* MainWindow); // retranslateUi
+    } ui;
+};

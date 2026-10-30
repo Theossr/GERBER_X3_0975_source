@@ -1,0 +1,235 @@
+// This is an open source non-commercial project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++, C#, and Java: https://pvs-studio.com
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ *******************************************************************************/
+#include "shape.h"
+#include "geo/boolean.h"
+#include "graphicsview.h"
+#include "math.h"
+#include "reflection.h"
+
+using Shapes::Handle;
+
+namespace {
+bool sameGeometry(const ShTxt::Shape::ShapeData& a, const ShTxt::Shape::ShapeData& b) {
+    return a.font == b.font
+        && a.text == b.text
+        && qFuzzyCompare(a.angle + 1, b.angle + 1)
+        && qFuzzyCompare(a.height + 1, b.height + 1)
+        && qFuzzyCompare(a.xy + 1, b.xy + 1)
+        && a.side == b.side
+        && a.handleAlign == b.handleAlign;
+}
+} // namespace
+
+namespace ShTxt {
+
+Shape::Shape(Shapes::Plugin* plugin, QPointF pt1)
+    : AbstractShape{plugin} {
+    loadData();
+    if(!std::isnan(pt1.x())) {
+        handles = {
+            Handle{pt1, Handle::Center}
+        };
+        redraw();
+    }
+    App::grView().addItem(this);
+}
+
+void Shape::rebuild() {
+    if(handles.empty()) return;
+
+    txtData.font.setPixelSize(100);
+
+    QFontMetrics fm{txtData.font};
+    const double capHeight = fm.capHeight();
+    // У шрифта без метрики capHeight масштаб уходит в inf, контуры — в
+    // NaN, а NaN в точном домене роняет GMP (mpq_set_d абортится).
+    if(capHeight <= 0.0) return;
+    const double scale = txtData.height / capHeight;
+
+    if(!cache_.valid || !sameGeometry(cache_.data, txtData)) {
+        QPainterPath painterPath; // TODO align multiline text
+        for(double i{}; auto&& txt: txtData.text.split(u'\n'))
+            painterPath.addText({0.0, fm.height() * i++}, txtData.font, txt);
+
+        auto bRect = painterPath.boundingRect();
+
+        QPointF handlePt = [width = bRect.width(), capHeight](auto handleAlign) -> QPointF {
+            // clang-format off
+        switch(handleAlign) {
+        case BotCenter:   return {width / 2, 0            };
+        case BotLeft:     return {                        };
+        case BotRight:    return {width,     0            };
+        case Center:      return {width / 2, capHeight / 2};
+        case CenterLeft:  return {0,         capHeight / 2};
+        case CenterRight: return {width,     capHeight / 2};
+        case TopCenter:   return {width / 2, capHeight    };
+        case TopLeft:     return {0,         capHeight    };
+        case TopRight:    return {width,     capHeight    };
+        default:          return {                        };
+        }
+            // clang-format on
+        }(txtData.handleAlign)
+            * -1;
+
+        // Указатель — в начале координат: его позиция добавляется позже
+        // простым сдвигом, чтобы кэш не инвалидировался при перемещении.
+        QTransform transform;
+        transform.translate(-bRect.left() * scale, 0);
+        transform.translate(handlePt.x() * scale, handlePt.y() * scale);
+        if(!qFuzzyIsNull(txtData.angle)) transform.rotate(txtData.angle);
+        if(txtData.side == Bottom) {
+            transform.translate((bRect.right() + bRect.left()) * scale, 0);
+            transform.scale(-scale * (txtData.xy / 100.), -scale);
+        } else {
+            transform.scale(+scale * (txtData.xy / 100.), -scale);
+        }
+
+        // Контуры глифов объединяются в точном домене: перекрытия букв уходят,
+        // дырки («B», «о») выражаются вложенностью полигонов.
+        Geo::Polylines contours = Geo::fromPath(transform.map(painterPath), 0.01);
+
+        // В каноне Geo знак площади — тело/пустота: тела положительные. У глифов
+        // абсолютная ориентация зависит от формата шрифта и Y-флипа трансформа
+        // (зеркало нижней стороны флипает её ещё раз) — выравниваем по сумме:
+        // тела в ней всегда перевешивают собственные дырки.
+        double totalArea{};
+        for(const auto& contour: contours) totalArea += contour.signedArea();
+        if(totalArea < 0)
+            for(auto& contour: contours) contour.reverse();
+
+        cache_.data = txtData;
+        cache_.shape = transform.map(painterPath);
+        cache_.curves = Geo::BooleanOp(Geo::ClipType_::Union, Geo::FillRule_::NonZero, contours).contours();
+        cache_.valid = true;
+    }
+
+    // cache_.shape -- БАЗА с указателем в начале координат: каждый rebuild
+    // сдвигает её на полную текущую позицию указателя (не на дельту!).
+    const QPointF& pt = handles[0];
+    shape_ = QTransform::fromTranslate(pt.x(), pt.y()).map(cache_.shape);
+    curves_ = cache_.curves;
+    for(auto& contour: curves_)
+        for(auto& vertex: contour)
+            static_cast<QPointF&>(vertex) += pt;
+
+    assert(handles.size() == 1);
+}
+
+QString Shape::text() const { return txtData.text; }
+
+void Shape::setText(const QString& value) {
+    txtData.text = value;
+    redraw();
+}
+
+Side Shape::side() const { return txtData.side; }
+
+void Shape::setSide(const Side& side) {
+    txtData.side = side;
+    redraw();
+}
+
+void Shape::setPt(const QPointF& point) {
+    handles.front() = point;
+    redraw();
+}
+
+bool Shape::setData(const QModelIndex& index, const QVariant& value, int role) {
+    switch(FileTree::Column(index.column())) {
+    case FileTree::Column::NameColorVisible:
+        switch(role) {
+        case Qt::CheckStateRole:
+            setVisible(value.value<Qt::CheckState>() == Qt::Checked);
+            return true;
+        case Qt::EditRole:
+            setText(value.toString());
+            return true;
+        }
+        break;
+    case FileTree::Column::Side:
+        if(role == Qt::EditRole) {
+            setSide(static_cast<Side>(value.toBool()));
+            return true;
+        }
+        break;
+    default: break;
+    }
+    return AbstractShape::setData(index, value, role);
+}
+
+Qt::ItemFlags Shape::flags(const QModelIndex& index) const {
+    switch(FileTree::Column(index.column())) {
+    case FileTree::Column::NameColorVisible: return AbstractShape::flags(index) | Qt::ItemIsEditable;
+    case FileTree::Column::Side            : return AbstractShape::flags(index) | Qt::ItemIsEditable;
+    default                                : return AbstractShape::flags(index);
+    }
+}
+
+QVariant Shape::data(const QModelIndex& index, int role) const {
+    switch(FileTree::Column(index.column())) {
+    case FileTree::Column::NameColorVisible:
+        switch(role) {
+        case Qt::DisplayRole: return u"%1 (ID: %2)"_s.arg(text()).arg(id());
+        case Qt::EditRole   : return text();
+        default             : return AbstractShape::data(index, role);
+        }
+    case FileTree::Column::Side:
+        switch(role) {
+        case Qt::DisplayRole:
+        case Qt::ToolTipRole: return sideStrList[side()];
+        case Qt::EditRole   : return static_cast<bool>(side());
+        default             : return AbstractShape::data(index, role);
+        }
+    default: return AbstractShape::data(index, role);
+    }
+}
+
+void Shape::saveData() {
+    QSettings settings;
+    settings.beginGroup(u"ShapeText"_s);
+    for_each_field(txtData, [&settings](auto& field, std::string_view name) { // TODO for_each_field_name
+                                                                              // if constexpr(requires { field.family(); })
+                                                                              // settings.setValue(get_name<index, ShapeData>(), field.toString());
+                                                                              // else
+        settings.setValue(name, field);
+    });
+}
+
+Shape::ShapeData Shape::loadData() {
+    QSettings settings;
+    settings.beginGroup(u"ShapeText"_s);
+    for_each_field(txtData, [&settings]<typename Ty>(Ty& field, std::string_view name) { // TODO for_each_field_name
+                                                                                         // if constexpr(requires { field.family(); })
+                                                                                         // field.fromString(settings.value(name).toString());
+                                                                                         // else
+        field = settings.value(name).template value<Ty>();
+    });
+    return txtData;
+}
+
+void Shape::save() { iDataCopy = txtData; }
+
+void Shape::restore() {
+    txtData = std::move(iDataCopy);
+    redraw();
+}
+
+void Shape::ok() { saveData(); }
+
+QString Shape::name() const { return QObject::tr("Text"); }
+
+QIcon Shape::icon() const { return QIcon::fromTheme(u"draw-text"_s); }
+
+} // namespace ShTxt
+
+#include "moc_shape.cpp"

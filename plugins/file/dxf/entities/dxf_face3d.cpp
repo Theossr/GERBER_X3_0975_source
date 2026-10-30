@@ -1,0 +1,72 @@
+// This is an open source non-commercial project. Dear PVS-Studio, please check it.
+// PVS-Studio Static Code Analyzer for C, C++, C#, and Java: https://pvs-studio.com
+/*******************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ *******************************************************************************/
+#include "dxf_face3d.h"
+#include "dxf_file.h"
+
+namespace Dxf {
+
+void Face3D::parse(CodeData& code) {
+    do {
+        data.push_back(code);
+        switch(static_cast<DataEnum>(code.code())) {
+        case SubclassMarker    : break;
+        case InvisibleEdgeFlags: invisibleEdgeFlags = code; break;
+        case FirstCornerX      : firstCorner.rx() = code, corners |= FirstCorner; break;
+        case FirstCornerY      : firstCorner.ry() = code; break;
+        case FirstCornerZ      : cornerZ[0] = code; break;
+        case SecondCornerX     : secondCorner.rx() = code, corners |= SecondCorner; break;
+        case SecondCornerY     : secondCorner.ry() = code; break;
+        case SecondCornerZ     : cornerZ[1] = code; break;
+        case ThirdCornerX      : thirdCorner.rx() = code, corners |= ThirdCorner; break;
+        case ThirdCornerY      : thirdCorner.ry() = code; break;
+        case ThirdCornerZ      : cornerZ[2] = code; break;
+        case FourthCornerX     : fourthCorner.rx() = code, corners |= FourthCorner; break;
+        case FourthCornerY     : fourthCorner.ry() = code; break;
+        case FourthCornerZ     : cornerZ[3] = code; break;
+        default                : Entity::parse(code);
+        }
+        code = sp->nextCode();
+    } while(code.code() != 0);
+    // Четвертая угловая точка не обязательна: если задано только три, она совпадает с третьей (треугольная грань).
+    if(!(corners & FourthCorner)) {
+        fourthCorner = thirdCorner;
+        cornerZ[3] = cornerZ[2];
+        corners |= FourthCorner;
+    }
+}
+
+Entity::Type Face3D::type() const { return Type::FACE3D; }
+
+DxfGo Face3D::toGo() const {
+    if(corners != 0xF)
+        throw DxfObj::tr("Unsupported type 3DFACE: corners %1!").arg(corners, 2);
+
+    // В отличие от SOLID/TRACE, третья и четвертая точки 3DFACE идут по периметру грани друг за другом,
+    // а не по диагонали, поэтому порядок обхода естественный: 1-2-3-4.
+    Geo::Polyline poly{
+        {firstCorner},
+        {secondCorner},
+        {thirdCorner},
+        {fourthCorner},
+    };
+    poly.close();
+
+    if(!poly.isPositive())
+        poly.reverse();
+
+    DxfGo go{id, Geo::Polyline{poly}, Geo::Polygons{Geo::Polylines{std::move(poly)}}};
+    go.type = DxfGo::Type(DxfGo::FlDrawn | DxfGo::FlStamp | DxfGo::Rect);
+    return go;
+}
+
+} // namespace Dxf

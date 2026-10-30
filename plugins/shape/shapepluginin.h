@@ -1,0 +1,70 @@
+/********************************************************************************
+ * Author    :  Damir Bakiev                                                    *
+ * Version   :  na                                                              *
+ * Date      :  XXXXX XX, 2025                                                  *
+ * Website   :  na                                                              *
+ * Copyright :  Damir Bakiev 2016-2026                                          *
+ * License   :                                                                  *
+ * Use, modification & distribution is subject to Boost Software License Ver 1. *
+ * http://www.boost.org/LICENSE_1_0.txt                                         *
+ ********************************************************************************/
+#pragma once
+
+#include "ggcore_export.h"
+
+#include "abstract_shape.h"
+#include "ft_view.h"
+#include "plugindata.h"
+
+namespace Shapes {
+class Node;
+
+struct Editor : QWidget {
+    virtual void add(class AbstractShape* shape) = 0;
+    virtual void remove(class AbstractShape* shape) = 0;
+    virtual void updateData() = 0;
+};
+
+class GGCORE_EXPORT Plugin : public QObject, public PluginData {
+    Q_OBJECT
+
+    // std::atomic<AbstractShape*> item {};
+    friend class AbstractShape;
+    AbstractShape* item{};
+    void requestEditor() { emit showEditor(editor()); }
+
+public:
+    explicit Plugin();
+    virtual ~Plugin() = default;
+
+    void addPoint(const QPointF& point);
+    void updPoint(const QPointF& point);
+    void finalizeShape();
+
+    virtual QIcon icon() const = 0;
+    [[nodiscard]] virtual AbstractShape* createShape(const QPointF& point = {}) = 0;
+    virtual uint32_t type() const = 0;
+    // Стабильное имя типа для "type" в JSON-проекте: "Circle", "Rectangle"...
+    // Диспетчеризация при загрузке — сканом App::shapePlugins() по этому имени
+    // (у шейпов type() — маленький int из Gi::Type, а не хэш имени).
+    [[nodiscard]] virtual std::string_view typeName() const { return {}; }
+    virtual Editor* editor() = 0;
+
+    void createMainMenu(QMenu& menu, FileTree::View* tv);
+    QString folderName() const;
+
+signals:
+    void actionUncheck(bool = false);
+    void showEditor(QWidget*);
+
+protected:
+    enum {
+        IconSize = 24
+    };
+};
+
+} // namespace Shapes
+
+#define ShapePlugin_iid "ru.xray3d.XrSoft.GGEasy.Plugin"
+
+Q_DECLARE_INTERFACE(Shapes::Plugin, ShapePlugin_iid)
