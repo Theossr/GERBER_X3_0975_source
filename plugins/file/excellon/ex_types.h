@@ -186,6 +186,11 @@ struct State {
 
     void reset(Format* f) {
         format = f;
+        if (format) {
+            format->unitMode = Millimeters;
+            format->decimal = 4;
+            format->integer = 2;
+        }
         gCode = G_NULL;
         mCode = M_NULL;
         path.clear();

@@ -376,23 +376,22 @@ bool Parser::parseRepeat(const QString& line) {
 }
 
 bool Parser::parseFormat(const QString& line) {
-    static const QVector<QString> unitMode({u"INCH"_s, u"METRIC"_s});
-    static const QVector<QString> zeroMode({u"LZ"_s, u"TZ"_s});
-    if(auto [whole, C1, CL2] = ctre::match<R"(^(METRIC|INCH).?(LZ|TZ)?$)">(std::u16string_view{line}); whole) {
-        if(C1)
-            switch(unitMode.indexOf(CtreCapTo(C1))) {
-            case Inches     : file->format_.unitMode = Inches; break;
-            case Millimeters: file->format_.unitMode = Millimeters; break;
-            default         : break;
-            }
-        if(CL2)
-            switch(zeroMode.indexOf(CtreCapTo(CL2))) {
-            case LeadingZeros : file->format_.zeroMode = LeadingZeros; break;
-            case TrailingZeros: file->format_.zeroMode = TrailingZeros; break;
-            default           : break;
-            }
+    static constexpr ctll::fixed_string regexFormat{
+        R"(^(INCH|METRIC),(\d+)\.(\d+)$)"
+    };
+
+    if(auto [whole, unit, integer, decimal] =
+        ctre::match<regexFormat>(std::u16string_view{line}); whole) {
+
+        file->format_.unitMode =
+            CtreCapTo(unit) == u"INCH"_s ? Inches : Millimeters;
+
+        file->format_.integer = CtreCapTo(integer).toString().size();
+        file->format_.decimal = CtreCapTo(decimal).toString().size();
+
         return true;
     }
+
     static constexpr ctll::fixed_string regex2{R"(^(FMAT).*(2)?$)"};
     if(auto [whole, C1, CL2] = ctre::match<regex2>(std::u16string_view{line}); whole) {
         file->format_.unitMode = Inches;
