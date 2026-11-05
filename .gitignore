@@ -106,9 +106,6 @@ build
 build-*
 libs_*
 
-# Binaries
-bin/*
-
 # Generated files (produced by configure_file, should not be committed)
 description.json
 versioninfo.rc
@@ -132,9 +129,6 @@ uic_*
 
 #makefiles
 
-#binaries
-bin
-
 #wrappers
 *_wrapper.bat
 
@@ -143,7 +137,6 @@ bin
 
 # folders
 /third_party/
-/bin/
 **/CMakeFiles/**
 
 # Вывод CMake при сборке в дереве исходников
