@@ -14,12 +14,12 @@
         <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600; color:#ff0000;&quot;&gt;Это «бета-версия», она не отражает итогового качества программы.&lt;br/&gt;Программа предоставляется КАК ЕСТЬ, без каких-либо гарантий.&lt;br/&gt;Используйте на свой риск.&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
-        <location filename="../aboutform.ui" line="42"/>
+        <location filename="../aboutform.ui" line="49"/>
         <source>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Build: %1&lt;br/&gt;Visit: &lt;a href=&quot;https://github.com/XRay3D/GERBER_X3/&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://github.com/XRay3D/GERBER_X3/&lt;/span&gt;&lt;/a&gt;&lt;a href=&quot;https://github.com/Denvi/Candle/&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;&lt;br/&gt;&lt;/span&gt;&lt;/a&gt;© 2017-2024 Damir Bakiev&lt;br/&gt;License: GNU GENERAL PUBLIC LICENSE&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</source>
         <translation>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Сборка: %1&lt;br/&gt;Сайт: &lt;a href=&quot;https://github.com/XRay3D/GERBER_X3/&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://github.com/XRay3D/GERBER_X3/&lt;/span&gt;&lt;/a&gt;&lt;a href=&quot;https://github.com/Denvi/Candle/&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;&lt;br/&gt;&lt;/span&gt;&lt;/a&gt;© 2017-2024 Damir Bakiev&lt;br/&gt;Лицензия: GNU GENERAL PUBLIC LICENSE&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</translation>
     </message>
     <message>
-        <location filename="../aboutform.ui" line="66"/>
+        <location filename="../aboutform.ui" line="73"/>
         <source>                    GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
 

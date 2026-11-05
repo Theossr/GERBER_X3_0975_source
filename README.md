@@ -8,7 +8,7 @@
 
 Продукт разработан на основе GGeasy **XRay3D (Damir Bakyiev)**.
 
-Исходный код отредактирован и адаптирован для работы со **Схематор&Платформ** (Редактор **Theossr (Fyodor Abramov)**).
+Исходный код отредактирован и адаптирован для работы со **схемАтор & платФорм** (Редактор **Theossr (Fyodor Abramov)**).
 
 Другие версии программы и готовые сборки: [Releases](https://github.com/XRay3D/GERBER_X3/releases).
 
@@ -115,7 +115,7 @@ The application supports viewing and editing Gerber files, G-code generation, an
 
 The product is based on GGeasy, originally developed by **XRay3D (Damir Bakyiev)**.
 
-The source code has been modified and adapted for use with **Schemator&Platform** (Adaptation editor: **Theossr (Fyodor Abramov)**).
+The source code has been modified and adapted for use with **schemAtor & platForm** (Adaptation editor: **Theossr (Fyodor Abramov)**).
 
 Other versions of the application and prebuilt releases: [Releases](https://github.com/XRay3D/GERBER_X3/releases).
 

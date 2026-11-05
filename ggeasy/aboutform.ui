@@ -37,6 +37,13 @@
     </widget>
    </item>
    <item>
+    <widget class="QLabel" name="label">
+     <property name="text">
+      <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Программа доработана Theossr (http://github.com/Theossr) для&lt;span style=&quot; font-weight:600; color:#55aa7f;&quot;&gt; СхемАтор&amp;amp;ПлатФорм  &lt;/span&gt;&lt;/p&gt;&lt;p&gt;mail: feolab05@gmail.com&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+     </property>
+    </widget>
+   </item>
+   <item>
     <widget class="QLabel" name="lblAbout">
      <property name="text">
       <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Build: %1&lt;br/&gt;Visit: &lt;a href=&quot;https://github.com/XRay3D/GERBER_X3/&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://github.com/XRay3D/GERBER_X3/&lt;/span&gt;&lt;/a&gt;&lt;a href=&quot;https://github.com/Denvi/Candle/&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;&lt;br/&gt;&lt;/span&gt;&lt;/a&gt;© 2017-2024 Damir Bakiev&lt;br/&gt;License: GNU GENERAL PUBLIC LICENSE&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
